@@ -143,7 +143,7 @@ Tested with real traffic (network namespaces, iptables as on the server):
 
 ## Outside the package (recommended, not checkable from here)
 
-- **Proxmox firewall** for the LXC: TCP 80/443 only from the upstream proxy (10.0.0.10); SSH and Portainer (9443 =
+- **Proxmox firewall** for the LXC: TCP 80/443 only from the upstream proxy (<PROXY-IP>); SSH and Portainer (9443 =
   root on the host) only from the admin network.
 - **Backups** in `/var/backups/kira` contain the secrets and all chats unencrypted (folder 700) – enable client-side
   encryption in Proxmox Backup Server.

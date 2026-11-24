@@ -301,7 +301,7 @@ Once in Keycloak (realm `kira`):
    `/opt/keycloak/caddy/*.caddy`), allow this server read-only access to the groups – inside the matcher:
    ```
    not {
-   	client_ip 10.0.0.13
+   	client_ip <KIRA-IP>
    	method GET
    	path /admin/realms/kira/groups /admin/realms/kira/groups/*
    }
@@ -413,7 +413,7 @@ What the package does:
 
 Recommended outside the package (not checkable from here):
 
-- **Proxmox firewall** for the LXC: TCP 80/443 only from 10.0.0.10, 22 and 9443 (Portainer = root on the host) only
+- **Proxmox firewall** for the LXC: TCP 80/443 only from <PROXY-IP>, 22 and 9443 (Portainer = root on the host) only
   from the admin network.
 - **Backups** in `/var/backups/kira` contain the secrets from `env/` and all chats unencrypted (folder 700) – enable
   client-side encryption in Proxmox Backup Server.

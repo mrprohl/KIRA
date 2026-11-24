@@ -41,4 +41,4 @@ Secrets and everything generated on the server stay out (see [.gitignore](.gitig
 ## License
 
 [MIT](LICENSE). The configuration templates are examples – domains and IP addresses are placeholders
-(`example.com`, `203.0.113.x`).
+(`example.com`, `203.0.113.x`, `<KIRA-IP>`, `<KEYCLOAK-IP>`, `<PROXY-IP>`).

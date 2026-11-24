@@ -1,6 +1,6 @@
 # Guide: installing KIRA (step by step)
 
-For the server `kira.example.com` (LXC 10.0.0.13), fresh installation. Each step ends with a **checkpoint**: only continue when it passes.
+For the server `kira.example.com` (LXC <KIRA-IP>), fresh installation. Each step ends with a **checkpoint**: only continue when it passes.
 Background on architecture and modules: `/opt/kira/README.md`.
 
 Time needed: about 30 minutes without Onyx, with Onyx an additional 30–60 minutes (first start, indexing).
@@ -44,7 +44,7 @@ Only if Onyx is used:
 ss -tlnp | grep -E ':(80|443|8080) '                   # ports must be free – no output
 apt install -y cron python3 curl openssl unzip
 cd /root && unzip -o kira-stack.zip -d /opt             # extract directly on the server, not on Windows
-umask 077; scp root@10.0.0.99:/opt/keycloak/env/kira-client-kira.env /opt/kira/env/keycloak-client.env
+umask 077; scp root@<KEYCLOAK-IP>:/opt/keycloak/env/kira-client-kira.env /opt/kira/env/keycloak-client.env
 ls /opt                                                 # caddy bifrost kira websearch onyx
 ```
 
@@ -66,8 +66,8 @@ Answers for this server:
 |---|---|
 | Domain for KIRA | `kira.example.com` |
 | E-mail address for Let's Encrypt | a mailbox that is read, e.g. `kira@example.com` (expiry warnings) |
-| upstream reverse proxy | `10.0.0.10` |
-| internal IP of the Keycloak server | `10.0.0.99` |
+| upstream reverse proxy | `<PROXY-IP>` |
+| internal IP of the Keycloak server | `<KEYCLOAK-IP>` |
 | Onyx / images / speech | as decided in step 1; speech output e.g. `gpt-4o-mini-tts`, leave the default voice empty (= `fable`) |
 | Restrict agents per Keycloak group? | `yes` if the groups are set up in Keycloak – mapper `groups`, default group `kira-users-default` under *Realm settings* → *User registration* → *Default groups* (README, section "Agents per Keycloak group"), otherwise `no` |
 | How long does a login stay active? | empty = `30d` (possible `8h` to `365d`) |
@@ -86,7 +86,7 @@ Answers for this server:
 | Name of the external service | one name per service (e.g. `automation`, `crm`), then its existing key; empty = done |
 | budgets | from step 1 |
 | Onyx API key | leave **empty** (comes in step 7) |
-| Uptime Kuma push URLs | from step 1, internal IP `10.0.0.10` |
+| Uptime Kuma push URLs | from step 1, internal IP of Uptime Kuma |
 | Start the stacks now? | `yes` |
 
 `setup.sh` pulls the images, starts bifrost → websearch → kira → (onyx) → caddy and runs the self-test.
@@ -125,7 +125,7 @@ Keycloak admin (`https://id.example.com`) → realm **kira** → Clients → **k
 3. Select agent **KIRA**: "Welche Version hat LibreChat aktuell?" → answer with sources (web search).
 4. Agent **Textwerkstatt**: upload a PDF, "Fasse das Dokument zusammen" → answer with a quote (document search).
 5. Search the sidebar for a word from the first chat → the chat is found (chat search).
-6. Check the Bifrost web interface: `ssh -L 8080:127.0.0.1:8080 root@10.0.0.13`, then `http://localhost:8080`
+6. Check the Bifrost web interface: `ssh -L 8080:127.0.0.1:8080 root@<KIRA-IP>`, then `http://localhost:8080`
    (login: `grep ^BIFROST_ADMIN /opt/bifrost/env/bifrost.env`) → the logs show the requests (with user, if enabled).
 
 **Checkpoint:** all six items work.
