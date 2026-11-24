@@ -15,7 +15,7 @@ Have ready (do not paste into chats or tickets):
       depend on one person), **scoped to one workspace** – a key without a workspace needs the header
       `anthropic-workspace-id`, which Bifrost does not send (error 400). A personal key (`sk-ant-usr…`) works too,
       but stops working when its owner leaves the organization.
-- [ ] list of the external services using the LLM API (e.g. n8n instances); if they should keep their current Bifrost
+- [ ] list of the external services using the LLM API (e.g. automation tools, own scripts); if they should keep their current Bifrost
       key, have that key (`sk-bf-…`) ready
 - [ ] budgets in USD: LibreChat per 5 hours / week / month, Onyx per day / month, each external service per day / month
 - [ ] Uptime Kuma: create the push monitors **"KIRA Container"** (interval 360 s) and **"KIRA Backup"** (90000 s), note the push URLs
@@ -83,7 +83,7 @@ Answers for this server:
 | LAN block | `yes` |
 | Domain for the LLM API | `llm.example.com`, allowed IPs: `203.0.113.10 203.0.113.20` |
 | Domain for the Bifrost web interface | empty (access via SSH tunnel) – or `bifrost.example.com` with `203.0.113.10` |
-| Name of the external service | one name per service (e.g. `n8n`, `crm`), then its existing key; empty = done |
+| Name of the external service | one name per service (e.g. `automation`, `crm`), then its existing key; empty = done |
 | budgets | from step 1 |
 | Onyx API key | leave **empty** (comes in step 7) |
 | Uptime Kuma push URLs | from step 1, internal IP `10.0.0.10` |
@@ -182,7 +182,7 @@ about one of your documents with a link to it.
 
 ---
 
-## Step 8 – Check monitoring and n8n
+## Step 8 – Check monitoring and external services
 
 ```bash
 /opt/kira/scripts/monitor.sh && echo ok                # push "KIRA Container" turns green

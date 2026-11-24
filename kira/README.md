@@ -10,7 +10,7 @@ Step-by-step installation: `INSTALL.md`.
 ```mermaid
 flowchart LR
   U([Browser / PWA]) -->|HTTPS| C
-  N8N([External applications]) -->|HTTPS, allowed IPs only| C
+  EXT([External applications]) -->|HTTPS, allowed IPs only| C
 
   subgraph caddy["/opt/caddy"]
     C[Caddy<br/>TLS, reverse proxy]

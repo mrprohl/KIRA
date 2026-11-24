@@ -367,12 +367,12 @@ else
     sk-ant-*) ;;
     *) warn "Key does not start with sk-ant- – please check." ;;
   esac
-  # External services (e.g. n8n instances, own scripts): one virtual key per service via the LLM API
+  # External services (e.g. automation tools, own scripts): one virtual key per service via the LLM API
   info "External services that should use Bifrost via the LLM API – one virtual key per service."
   info "If a service should keep its current key (sk-bf-…), enter it – otherwise a new one is generated."
   EXT_LINES=""; EXT_SEEN=" librechat onyx "
   while :; do
-    ask_optional EXT_NAME "Name of the external service (e.g. n8n-office; empty = done)"
+    ask_optional EXT_NAME "Name of the external service (e.g. automation; empty = done)"
     [ -z "$EXT_NAME" ] && break
     EXT_NAME=$(printf '%s' "${EXT_NAME,,}" | tr ' _' '--')
     if ! [[ $EXT_NAME =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]]; then
