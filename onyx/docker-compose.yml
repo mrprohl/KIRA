@@ -1,0 +1,14 @@
+# ============================================================================
+# onyx (optional) – paste this file into Portainer (stack name onyx, no environment variables)
+#   or via CLI:  docker compose -f /opt/onyx/docker-compose.yml up -d
+# Definition: /opt/onyx/compose.yml · versions: env/versions.env · Keycloak address: env/compose.env (setup.sh)
+# Requires Docker Compose ≥ 2.20 (include with env_file) and read access to /opt.
+# Only start if /opt/kira/env/setup.env contains ONYX_ENABLED=true (resources!).
+# ============================================================================
+name: onyx
+
+include:
+  - path: /opt/onyx/compose.yml
+    env_file:
+      - /opt/onyx/env/versions.env
+      - /opt/onyx/env/compose.env

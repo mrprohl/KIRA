@@ -1,0 +1,96 @@
+# ============================================================================
+# Bifrost – LLM gateway (Claude, OpenAI) for LibreChat, Onyx and external services; included by /opt/bifrost/docker-compose.yml
+# Versions from env/versions.env, secrets from /opt/bifrost/env/*.env (folder 700, files 600, /opt/kira/setup.sh)
+#
+#   bifrost     provider keys, virtual keys per service, budgets, rate limits, fallbacks, logs
+#   db          PostgreSQL for Bifrost only (configuration, logs)
+#
+# Networks:
+#   bifrost-outbound 172.31.61.0/24  internet (Anthropic, OpenAI, price list) – LAN/host blocked (LAN block)
+#   kira-llm         internal, created externally   clients: LibreChat, RAG API, Onyx
+#   kira-proxy       internal, created externally   Caddy (LLM API for external services, Bifrost web interface)
+#   backend          internal                       bifrost <-> db
+# ============================================================================
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+
+  bifrost:
+    <<: *hardening
+    container_name: bifrost
+    hostname: bifrost
+    image: maximhq/bifrost:${BIFROST_TAG:?set in env/versions.env}
+    user: "1000:0"               # as in the image; no capabilities needed
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 256
+    mem_limit: 1g
+    networks:
+      backend: {}
+      outbound: {}
+      kira-llm: {}
+      kira-proxy: {}
+    volumes:
+      - bifrost:/app/data
+      - /opt/bifrost/config/bifrost.json:/app/data/config.json:ro
+    env_file:
+      - /opt/bifrost/env/bifrost.env     # provider keys, virtual keys, admin login, encryption key, DB password
+    environment:
+      TZ: "Europe/Berlin"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s         # load price list, DB migration
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    <<: *hardening
+    container_name: bifrost-db
+    hostname: db
+    image: postgres:${POSTGRES_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]   # entrypoint: set permissions, switch to postgres
+    pids_limit: 256
+    mem_limit: 512m
+    shm_size: 128m
+    networks: [backend]
+    volumes:
+      - db:/var/lib/postgresql
+      - /opt/bifrost/db/init:/docker-entrypoint-initdb.d:ro
+    env_file:
+      - /opt/bifrost/env/database.env    # POSTGRES_PASSWORD, BIFROST_DB_PASSWORD
+    environment:
+      POSTGRES_USER: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  outbound:
+    name: bifrost-outbound
+    ipam: { config: [{ subnet: 172.31.61.0/24 }] }   # source of the LAN block – do not change
+  backend:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.24.0/24 }] }
+  kira-llm:
+    external: true
+  kira-proxy:
+    external: true
+
+volumes:
+  bifrost:
+  db:

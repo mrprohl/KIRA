@@ -1,0 +1,12 @@
+# ============================================================================
+# caddy – paste this file into Portainer (stack name caddy, no environment variables)
+#   or via CLI:  docker compose -f /opt/caddy/docker-compose.yml up -d
+# Definition: /opt/caddy/compose.yml · versions: /opt/caddy/env/versions.env (from /opt/kira/setup.sh)
+# Requires Docker Compose ≥ 2.20 (include with env_file) and read access to /opt.
+# Project name caddy: the volume is called caddy_data (certificates – kept on reinstallation).
+# ============================================================================
+name: caddy
+
+include:
+  - path: /opt/caddy/compose.yml
+    env_file: /opt/caddy/env/versions.env

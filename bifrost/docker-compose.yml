@@ -1,0 +1,11 @@
+# ============================================================================
+# bifrost – paste this file into Portainer (stack name bifrost, no environment variables)
+#   or via CLI:  docker compose -f /opt/bifrost/docker-compose.yml up -d
+# Definition: /opt/bifrost/compose.yml · versions: /opt/bifrost/env/versions.env (from /opt/kira/setup.sh)
+# Requires Docker Compose ≥ 2.20 (include with env_file) and read access to /opt.
+# ============================================================================
+name: bifrost
+
+include:
+  - path: /opt/bifrost/compose.yml
+    env_file: /opt/bifrost/env/versions.env

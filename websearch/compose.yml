@@ -1,0 +1,185 @@
+# ============================================================================
+# Web search for KIRA – SearXNG (result list) + Firecrawl (reads the result pages as text)
+# included by /opt/websearch/docker-compose.yml; versions from env/versions.env, secrets from env/*.env
+#
+#   searxng            meta search across several search engines, no account and no API costs
+#   firecrawl          scraper API (port 3002, internal only) – fetches pages, returns Markdown
+#   playwright-service browser for Firecrawl (pages with JavaScript)
+#   redis, rabbitmq, nuq-postgres   queues/caches of Firecrawl (no data that needs backing up)
+#
+# Networks:
+#   websearch-outbound 172.31.63.0/24  internet (search engines, result pages) – LAN/host blocked (LAN block)
+#   kira-search        internal, created externally   only LibreChat queries SearXNG and Firecrawl
+#   backend            internal                       Firecrawl <-> Playwright, Redis, RabbitMQ, Postgres
+# ============================================================================
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+
+  searxng:
+    <<: *hardening
+    container_name: searxng
+    hostname: searxng
+    image: searxng/searxng:${SEARXNG_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]   # entrypoint switches to the user searxng
+    pids_limit: 256
+    mem_limit: 512m
+    networks:
+      outbound: {}
+      kira-search: {}
+    tmpfs:
+      - /etc/searxng:mode=1777,size=1m         # occupies the image VOLUME; settings.yml is mounted on top
+    volumes:
+      - /opt/websearch/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng:/var/cache/searxng
+    env_file:
+      - /opt/websearch/env/searxng.env    # SEARXNG_SECRET
+    environment:
+      SEARXNG_BASE_URL: "http://searxng:8080/"
+
+  firecrawl:
+    <<: *hardening
+    container_name: firecrawl
+    hostname: firecrawl
+    image: ghcr.io/firecrawl/firecrawl:${FIRECRAWL_TAG:?set in env/versions.env}
+    command: ["node", "dist/src/harness.js", "--start-docker"]
+    ulimits:
+      nofile: { soft: 65535, hard: 65535 }
+    mem_limit: 4g
+    pids_limit: 1024
+    networks:
+      backend: {}
+      outbound: {}
+      kira-search: {}
+    env_file:
+      - /opt/websearch/env/firecrawl.env  # POSTGRES_PASSWORD (queue)
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3002"
+      ENV: "local"
+      USE_DB_AUTHENTICATION: "false"     # reachable internally only (kira-search), no port on the host
+      REDIS_URL: "redis://redis:6379"
+      REDIS_RATE_LIMIT_URL: "redis://redis:6379"
+      PLAYWRIGHT_MICROSERVICE_URL: "http://playwright-service:3000/scrape"
+      NUQ_RABBITMQ_URL: "amqp://rabbitmq:5672"
+      POSTGRES_HOST: "nuq-postgres"
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: "postgres"
+      POSTGRES_DB: "postgres"
+      EXTRACT_WORKER_PORT: "3004"
+      WORKER_PORT: "3005"
+      HARNESS_STARTUP_TIMEOUT_MS: "120000"
+      # sized small for the PoC – increase if needed
+      NUM_WORKERS_PER_QUEUE: "2"
+      CRAWL_CONCURRENT_REQUESTS: "4"
+      MAX_CONCURRENT_JOBS: "3"
+      BROWSER_POOL_SIZE: "2"
+      LOGGING_LEVEL: "info"
+    depends_on:
+      redis:
+        condition: service_started
+      playwright-service:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      nuq-postgres:
+        condition: service_healthy
+
+  playwright-service:
+    <<: *hardening
+    container_name: firecrawl-playwright
+    hostname: playwright-service
+    image: ghcr.io/firecrawl/playwright-service:${FIRECRAWL_PLAYWRIGHT_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    mem_limit: 2g
+    pids_limit: 2048               # Chromium starts many processes
+    networks:
+      backend: {}
+      outbound: {}
+    environment:
+      PORT: "3000"
+      BLOCK_MEDIA: "true"
+      MAX_CONCURRENT_PAGES: "4"
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+
+  redis:
+    <<: *hardening
+    container_name: firecrawl-redis
+    hostname: redis
+    image: redis:${REDIS_TAG:?set in env/versions.env}
+    command: ["redis-server", "--bind", "0.0.0.0", "--save", "", "--appendonly", "no"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]   # entrypoint: set permissions, switch to redis
+    mem_limit: 512m
+    pids_limit: 128
+    networks: [backend]
+    volumes:
+      - redis:/data                # occupies the image VOLUME (no anonymous volume); content is not persisted
+
+  rabbitmq:
+    <<: *hardening
+    container_name: firecrawl-rabbitmq
+    hostname: rabbitmq
+    image: rabbitmq:${RABBITMQ_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    mem_limit: 1g
+    pids_limit: 1024               # Erlang threads count as processes
+    networks: [backend]
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  nuq-postgres:
+    <<: *hardening
+    container_name: firecrawl-nuq-postgres
+    hostname: nuq-postgres
+    image: ghcr.io/firecrawl/nuq-postgres:${FIRECRAWL_NUQ_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    mem_limit: 1g
+    pids_limit: 256
+    shm_size: 128m
+    networks: [backend]
+    volumes:
+      - nuq-postgres:/var/lib/postgresql/data
+    env_file:
+      - /opt/websearch/env/firecrawl.env  # POSTGRES_PASSWORD
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_DB: "postgres"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+networks:
+  outbound:
+    name: websearch-outbound
+    ipam: { config: [{ subnet: 172.31.63.0/24 }] }   # source of the LAN block – do not change
+  backend:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.26.0/24 }] }
+  kira-search:
+    external: true
+
+volumes:
+  searxng:
+  redis:
+  rabbitmq:
+  nuq-postgres:

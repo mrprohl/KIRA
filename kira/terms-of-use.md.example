@@ -1,0 +1,34 @@
+# Nutzungsbedingungen für KIRA
+
+KIRA ist ein privat betriebener KI-Assistent. Er hilft beim Fragen klären, Schreiben, Zusammenfassen, Recherchieren, Lernen und Planen. Zugang haben nur eingeladene Personen. Mit „Annehmen“ bestätigst du, dass du diese Regeln gelesen hast und dich daran hältst.
+
+**1. Ergebnisse immer prüfen**
+KIRA arbeitet mit KI-Modellen, die Fehler machen können: Fakten, Zahlen, Termine, Quellen oder Paragraphen können falsch oder veraltet sein, auch wenn sie überzeugend klingen. Prüfe wichtige Ergebnisse, bevor du sie verwendest oder weitergibst. Die Verantwortung für das, was du damit machst, liegt bei dir.
+
+**2. Keine Fachberatung**
+Antworten zu Recht, Steuern, Finanzen oder Gesundheit sind unverbindliche Hinweise und ersetzen keine Anwältin, Steuerberatung, Ärztin oder Apotheke. In einem Notfall wähle 112.
+
+**3. Sorgsam mit Daten umgehen**
+Gib keine Kennwörter, PINs, TANs oder anderen Zugangsdaten ein. Persönliche Daten anderer Menschen (z. B. Namen, Adressen, Gesundheits- oder Bankdaten) gibst du nur ein, wenn es für deine Frage wirklich nötig ist und die Betroffenen damit einverstanden wären. Lade nur Dateien hoch, die du weitergeben darfst.
+
+**4. Fair nutzen**
+Nutze KIRA nicht für Rechtswidriges, nicht um andere zu täuschen, zu belästigen oder bloßzustellen und nicht um Profile über einzelne Personen zu erstellen. Es gelten außerdem die Nutzungsrichtlinien der KI-Anbieter (Anthropic, OpenAI). {{MESSAGE_LIMIT}}
+
+**5. Kinder**
+Kinder nutzen KIRA nur mit Einverständnis ihrer Eltern. KIRA ersetzt keine Lehrkraft und keine Aufsicht.
+
+**6. Was gespeichert wird**
+- Gespeichert werden dein Anmeldename, deine E-Mail-Adresse, deine Chats, hochgeladene Dateien und deine Einstellungen – auf dem eigenen Server, nicht bei Dritten.
+- Chats werden {{CHAT_RETENTION}}. Temporäre Chats werden nach {{TEMP_CHAT_RETENTION}} gelöscht. Einzelne Chats kannst du jederzeit selbst löschen.
+- Für Kosten und Fehlersuche protokolliert das KI-Gateway jede Anfrage (Zeit, Modell, Kosten) {{USER_IN_LOGS}} und bewahrt diese Protokolle {{LOG_RETENTION}} auf. {{LOG_CONTENT}}
+
+**7. Wohin deine Anfragen gehen**
+Damit KIRA antworten kann, werden deine Nachrichten und die dazu nötigen Inhalte (z. B. hochgeladene Dateien, Suchergebnisse) an die KI-Anbieter Anthropic und OpenAI übermittelt, die ihren Sitz in den USA haben. Bei der Websuche gehen Suchbegriffe an Suchmaschinen, und Webseiten werden abgerufen. Die Anbieter verwenden API-Anfragen nach eigenen Angaben nicht zum Training ihrer Modelle.
+
+**8. Eigene Agenten**
+Wenn du eigene Agenten bauen darfst, sind sie privat und nur für dich sichtbar. Für ihre Anweisungen und Inhalte bist du selbst verantwortlich.
+
+**9. Verfügbarkeit und Änderungen**
+KIRA ist ein privates Angebot ohne Anspruch auf Verfügbarkeit; Funktionen, Modelle und Limits können sich ändern. Ändern sich diese Bedingungen, wirst du beim nächsten Login gebeten, die neue Fassung anzunehmen. Auf Wunsch werden dein Zugang und deine Chats gelöscht.
+
+Fragen und Wünsche an: [Name und E-Mail-Adresse eintragen]

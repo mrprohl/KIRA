@@ -1,0 +1,186 @@
+# ============================================================================
+# KIRA – LibreChat with chat search (Meilisearch) and document search (RAG API + pgvector)
+# included by /opt/kira/docker-compose.yml; versions from env/versions.env, Keycloak address from env/compose.env,
+# secrets from /opt/kira/env/*.env (folder 700, files 600, setup.sh)
+#
+#   librechat     KIRA web interface, login via Keycloak (OIDC), agents from agents/ (config/librechat.yaml)
+#   mongodb       LibreChat data (users, chats, agents, file metadata)
+#   meilisearch   full-text search in the user's own chats
+#   rag_api       splits uploaded documents, embeddings via Bifrost, search for the agents
+#   vectordb      PostgreSQL with pgvector for the RAG API
+#
+# Networks:
+#   kira-outbound 172.31.62.0/24  LibreChat -> Keycloak (OIDC); with KEYCLOAK_INTERNAL_IP only Keycloak:443 + DNS, no internet
+#   kira-proxy / kira-llm / kira-search / kira-onyx   internal, created externally (setup.sh)
+#   backend       internal        LibreChat <-> MongoDB, Meilisearch, RAG API; RAG API <-> pgvector
+# MongoDB, Meilisearch, pgvector and the RAG API have NO internet access.
+# ============================================================================
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+
+  librechat:
+    <<: *hardening
+    container_name: librechat
+    hostname: librechat
+    image: ${LIBRECHAT_IMAGE:?set in env/versions.env}:${LIBRECHAT_TAG:?set in env/versions.env}
+    cap_drop: [ALL]              # runs as user node, needs no capabilities
+    pids_limit: 1024
+    mem_limit: 3g
+    networks:
+      backend: {}
+      outbound: {}
+      kira-proxy: {}
+      kira-llm: {}
+      kira-search: {}
+      kira-onyx: {}
+    extra_hosts:
+      # Keycloak directly in the LAN (setup.sh, env/compose.env) – without an entry a harmless placeholder
+      - "${KEYCLOAK_HOST:-keycloak.invalid}:${KEYCLOAK_IP:-127.0.0.1}"
+    volumes:
+      - /opt/kira/config/librechat.yaml:/app/librechat.yaml:ro
+      - images:/app/client/public/images
+      - uploads:/app/uploads
+      - logs:/app/logs
+      - data:/app/data
+    env_file:
+      - /opt/kira/env/librechat.env      # domain, secrets, OIDC, Bifrost key, search, switches
+    environment:
+      TZ: "Europe/Berlin"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      meilisearch:
+        condition: service_started
+      rag_api:
+        condition: service_started
+
+  mongodb:
+    <<: *hardening
+    container_name: librechat-mongodb
+    hostname: mongodb
+    image: mongo:${MONGO_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]   # entrypoint: set permissions, switch to mongodb
+    pids_limit: 512
+    mem_limit: 2g
+    networks: [backend]
+    volumes:
+      - mongodb:/data/db
+      - mongodb-config:/data/configdb
+    env_file:
+      - /opt/kira/env/mongodb.env        # MONGO_INITDB_ROOT_USERNAME, MONGO_INITDB_ROOT_PASSWORD
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  meilisearch:
+    <<: *hardening
+    container_name: librechat-meilisearch
+    hostname: meilisearch
+    image: getmeili/meilisearch:${MEILI_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    pids_limit: 256
+    mem_limit: 1g
+    networks: [backend]
+    volumes:
+      - meilisearch:/meili_data
+    env_file:
+      - /opt/kira/env/meilisearch.env    # MEILI_MASTER_KEY
+    environment:
+      MEILI_ENV: "production"
+      MEILI_NO_ANALYTICS: "true"
+
+  rag_api:
+    <<: *hardening
+    container_name: librechat-rag
+    hostname: rag_api
+    image: ${RAG_API_IMAGE:?set in env/versions.env}:${RAG_API_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    pids_limit: 256
+    mem_limit: 2g
+    networks:
+      backend: {}
+      kira-llm: {}               # embeddings via Bifrost
+    volumes:
+      - rag-uploads:/app/uploads
+    env_file:
+      - /opt/kira/env/rag.env            # DB access, JWT_SECRET, Bifrost key, embedding model
+    environment:
+      DB_HOST: "vectordb"
+      DB_PORT: "5432"
+      RAG_PORT: "8000"
+      TZ: "Europe/Berlin"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      vectordb:
+        condition: service_healthy
+
+  vectordb:
+    <<: *hardening
+    container_name: librechat-vectordb
+    hostname: vectordb
+    image: pgvector/pgvector:${PGVECTOR_TAG:?set in env/versions.env}
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    pids_limit: 256
+    mem_limit: 1g
+    shm_size: 128m
+    networks: [backend]
+    volumes:
+      - vectordb:/var/lib/postgresql/data
+    env_file:
+      - /opt/kira/env/vectordb.env       # POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  outbound:
+    name: kira-outbound
+    ipam: { config: [{ subnet: 172.31.62.0/24 }] }   # source of the LAN block – do not change
+  backend:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.25.0/24 }] }
+  kira-proxy:
+    external: true
+  kira-llm:
+    external: true
+  kira-search:
+    external: true
+  kira-onyx:
+    external: true
+
+volumes:
+  images:
+  uploads:
+  logs:
+  data:
+  mongodb:
+  mongodb-config:
+  meilisearch:
+  rag-uploads:
+  vectordb:
