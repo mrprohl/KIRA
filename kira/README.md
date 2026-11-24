@@ -55,6 +55,8 @@ flowchart LR
   OX ==>|internet| SP([SharePoint / Graph])
 ```
 
+Large version as an image: [docs/architecture.png](docs/architecture.png).
+
 ## Modules
 
 | Stack | Service | Task | Why it is included |
