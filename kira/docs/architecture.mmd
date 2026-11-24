@@ -1,0 +1,63 @@
+%% Source of docs/architecture.png – render: mmdc -i architecture.mmd -o architecture.png -b white -w 3600 -s 3 -c <config with "layout":"elk">
+flowchart LR
+  U([<b>Browser / PWA</b><br/>users]) -->|HTTPS| C
+  EXT([<b>External applications</b><br/>own virtual key]) -->|HTTPS, allowed IPs only| C
+
+  subgraph caddy["/opt/caddy"]
+    C[<b>Caddy</b><br/>TLS, reverse proxy<br/>only published ports]
+  end
+
+  subgraph kira["/opt/kira"]
+    LC[<b>LibreChat</b><br/>web interface, agents]
+    MO[(<b>MongoDB</b><br/>chats, users)]
+    ME[<b>Meilisearch</b><br/>chat search]
+    RAG[<b>RAG API</b><br/>documents]
+    VDB[(<b>pgvector</b><br/>embeddings)]
+  end
+
+  subgraph bifrost["/opt/bifrost"]
+    BF[<b>Bifrost</b><br/>LLM gateway<br/>keys, budgets]
+    BDB[(<b>PostgreSQL</b><br/>config, logs)]
+  end
+
+  subgraph websearch["/opt/websearch"]
+    SX[<b>SearXNG</b><br/>result list]
+    FC[<b>Firecrawl</b><br/>reads pages]
+  end
+
+  subgraph onyx["/opt/onyx (optional)"]
+    OX[<b>Onyx</b><br/>intranet index, MCP]
+  end
+
+  C --> LC
+  C -->|LLM API, admin UI| BF
+  C -->|admin UI| OX
+  LC --> MO & ME & RAG
+  RAG --> VDB
+  LC -->|chat, images, speech| BF
+  RAG -->|embeddings| BF
+  LC -->|web search| SX & FC
+  LC -->|MCP: agent Intranet| OX
+  OX -->|LLM| BF
+  BF --> BDB
+  LC -.->|OIDC login| KC([<b>Keycloak</b><br/>→ Microsoft 365])
+  BF ==>|internet| AI([<b>Anthropic, OpenAI</b>])
+  SX & FC ==>|internet| WEB([<b>Search engines,<br/>web pages</b>])
+  OX ==>|internet| SP([<b>SharePoint / Graph</b>])
+
+  classDef ext fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A,stroke-width:1.5px
+  classDef svc fill:#EEEDFE,stroke:#534AB7,color:#26215C,stroke-width:1.5px
+  classDef data fill:#E1F5EE,stroke:#0F6E56,color:#04342C,stroke-width:1.5px
+  classDef net fill:#FAECE7,stroke:#993C1D,color:#4A1B0C,stroke-width:1.5px
+  class U,EXT,KC ext
+  class C,LC,ME,RAG,BF,SX,FC,OX svc
+  class MO,VDB,BDB data
+  class AI,WEB,SP net
+  style caddy fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
+  style kira fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
+  style bifrost fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
+  style websearch fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
+  style onyx fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
+  linkStyle default stroke:#5F5E5A,stroke-width:1.6px
+  linkStyle 17,18,19,20 stroke:#993C1D,stroke-width:3px
+  linkStyle 16 stroke:#5F5E5A,stroke-width:1.6px,stroke-dasharray:6 5
