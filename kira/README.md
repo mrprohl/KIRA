@@ -1,3 +1,5 @@
+<img src="agents/10-kira.svg" alt="KIRA logo" width="72">
+
 # KIRA – AI assistant (proof of concept)
 
 As of 24.11.2026 · package `kira-stack.zip`, extracted to `/opt`. Chat interface **LibreChat** with fixed agents,
