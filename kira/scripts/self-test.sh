@@ -93,6 +93,14 @@ else
   check_http "LibreChat -> Firecrawl (reads example.com)" '^200 .*"success": ?true' \
     "docker logs --tail 80 firecrawl; needs internet (network websearch-outbound)" \
     POST http://firecrawl:3002/v2/scrape "$(env_get "$LC_ENV" FIRECRAWL_API_KEY)" '{"url":"https://example.com","formats":["markdown"]}'
+  # branding: the files in the container must be those from /opt/kira/branding (else: restart missing)
+  stale=""
+  for f in favicon-32x32.png logo.svg; do
+    [ "$(sha256sum < "$KIRA_DIR/branding/$f" 2>/dev/null)" = "$(docker exec librechat cat "/app/client/dist/assets/$f" 2>/dev/null | sha256sum)" ] \
+      || stale="$stale $f"
+  done
+  if [ -z "$stale" ]; then ok "Branding (logo, favicon) active"
+  else bad "Branding not active:$stale"; hint "docker restart librechat (after replacing files in /opt/kira/branding)"; fi
   ISSUER=$(env_get "$LC_ENV" OPENID_ISSUER)
   check_http "LibreChat -> Keycloak ($ISSUER)" '^200 ' \
     "KEYCLOAK_INTERNAL_IP in env/setup.env, LAN block exception (config/egress.env), firewall of the Keycloak server (443 from this host)" \

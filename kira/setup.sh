@@ -738,6 +738,11 @@ compose_env() {   # compose_env <file> – Keycloak address for extra_hosts (emp
 compose_env "$KIRA/env/compose.env"
 
 HASH_LC_BEFORE=$(file_hash "$KIRA/config/librechat.yaml")
+# Branding (logo, favicons, app manifest) is mounted file by file – a missing file would become an empty directory
+BRANDING_FILES="favicon-16x16.png favicon-32x32.png apple-touch-icon-180x180.png icon-192x192.png maskable-icon.png logo.svg manifest.webmanifest"
+for f in $BRANDING_FILES; do
+  [ -s "$KIRA/branding/$f" ] || die "branding/$f is missing – copy it from the package (README, section \"Branding\")."
+done
 umask 022; mkdir -p "$KIRA/config"; umask 077
 # Agents per group: create the mapping once from the template (a new package does not overwrite it)
 if [ ! -f "$KIRA/agents/groups.env" ]; then
@@ -746,6 +751,14 @@ if [ ! -f "$KIRA/agents/groups.env" ]; then
 fi
 KIRA_DIR=$KIRA python3 -I "$KIRA/scripts/librechat-config.py"
 HASH_LC_AFTER=$(file_hash "$KIRA/config/librechat.yaml")
+# a replaced branding file only reaches the container after a restart (bind mount keeps the old file)
+BRANDING_STAMP=$KIRA/config/branding.sha256
+HASH_BRANDING=$(cd "$KIRA/branding" && file_hash $BRANDING_FILES)
+if [ "$HASH_BRANDING" != "$(cat "$BRANDING_STAMP" 2>/dev/null)" ]; then
+  [ -f "$BRANDING_STAMP" ] && info "Branding changed – LibreChat will be restarted."
+  HASH_LC_AFTER="$HASH_LC_AFTER+branding"
+  (umask 022; echo "$HASH_BRANDING" > "$BRANDING_STAMP")
+fi
 
 # Own agents (BUILDER_GROUP + builder.<model group>=… in agents/groups.env): Keycloak service account for builder-sync.py
 has_builders() {
@@ -1178,7 +1191,7 @@ if [ "$START" = true ]; then
     info "bifrost.json changed – restarting Bifrost."; docker restart bifrost >/dev/null
   fi
   if [ "$HASH_LC_BEFORE" != "$HASH_LC_AFTER" ] && running librechat; then
-    info "librechat.yaml changed – restarting LibreChat."; docker restart librechat >/dev/null
+    info "librechat.yaml or branding changed – restarting LibreChat."; docker restart librechat >/dev/null
   fi
   if [ "$HASH_CADDY_BEFORE" != "$HASH_CADDY_AFTER" ] && running caddy; then
     info "Caddy configuration changed – reloading."
@@ -1197,7 +1210,7 @@ if [ "$START" = true ]; then
   "$KIRA/scripts/self-test.sh" || warn "Self-test reported errors – details above, README section \"Troubleshooting\"."
 else
   info "Not started. After starting (Portainer) check: $KIRA/scripts/self-test.sh"
-  [ "$HASH_LC_BEFORE" != "$HASH_LC_AFTER" ] && running librechat && info "Note: librechat.yaml changed – docker restart librechat"
+  [ "$HASH_LC_BEFORE" != "$HASH_LC_AFTER" ] && running librechat && info "Note: librechat.yaml or branding changed – docker restart librechat"
   [ "$HASH_BIFROST_BEFORE" != "$HASH_BIFROST_AFTER" ] && running bifrost && info "Note: bifrost.json changed – docker restart bifrost"
   [ "$HASH_CADDY_BEFORE" != "$HASH_CADDY_AFTER" ] && running caddy && info "Note: Caddy changed – docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
   groups_pending && info "Note: agents per group not applied yet – after starting: bash $KIRA/scripts/agent-groups.sh"

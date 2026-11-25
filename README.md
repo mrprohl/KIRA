@@ -12,7 +12,7 @@ The folders are extracted to `/opt` on the server, one Docker Compose stack each
 
 | Folder | Content |
 |---|---|
-| [`kira/`](kira/) | LibreChat, `setup.sh` (sets up all stacks), scripts, agents, documentation |
+| [`kira/`](kira/) | LibreChat, `setup.sh` (sets up all stacks), scripts, agents, branding (logo, favicon), documentation |
 | [`caddy/`](caddy/) | reverse proxy with Let's Encrypt |
 | [`bifrost/`](bifrost/) | LLM gateway with virtual keys and budgets |
 | [`websearch/`](websearch/) | SearXNG and Firecrawl |

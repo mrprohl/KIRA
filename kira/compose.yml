@@ -45,6 +45,14 @@ services:
       - "${KEYCLOAK_HOST:-keycloak.invalid}:${KEYCLOAK_IP:-127.0.0.1}"
     volumes:
       - /opt/kira/config/librechat.yaml:/app/librechat.yaml:ro
+      # branding (README, section "Branding"): own logo and app icons over the files of the image
+      - /opt/kira/branding/favicon-16x16.png:/app/client/dist/assets/favicon-16x16.png:ro
+      - /opt/kira/branding/favicon-32x32.png:/app/client/dist/assets/favicon-32x32.png:ro
+      - /opt/kira/branding/apple-touch-icon-180x180.png:/app/client/dist/assets/apple-touch-icon-180x180.png:ro
+      - /opt/kira/branding/icon-192x192.png:/app/client/dist/assets/icon-192x192.png:ro
+      - /opt/kira/branding/maskable-icon.png:/app/client/dist/assets/maskable-icon.png:ro
+      - /opt/kira/branding/logo.svg:/app/client/dist/assets/logo.svg:ro
+      - /opt/kira/branding/manifest.webmanifest:/app/client/dist/manifest.webmanifest:ro
       - images:/app/client/public/images
       - uploads:/app/uploads
       - logs:/app/logs

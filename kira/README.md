@@ -359,10 +359,31 @@ OpenSearch needs `vm.max_map_count=262144` on the host (for LXC set it on the Pr
 | Backup | daily at 02:30 to `/var/backups/kira/<date>/` (Bifrost DB, MongoDB, RAG, Onyx DB, uploads, `/opt` stacks incl. secrets), 14 days; push "KIRA Backup" |
 | Versions | edit `/opt/<stack>/env/versions.env`, redeploy the stack. Back up first. Pinned versions instead of `latest` where possible |
 | Caddy | site blocks `/opt/caddy/config/sites/*.caddy` freely editable, `docker exec caddy caddy reload --config /etc/caddy/Caddyfile` |
+| Logo and favicon | replace the files in `/opt/kira/branding/`, `bash /opt/kira/setup.sh` (restarts LibreChat) – section "Branding" |
 
 **Restore** (stop the stack, start only the database): `pg_restore -U postgres -d bifrost --clean` or
 `mongorestore --archive --gzip --drop` (with the user from `env/mongodb.env`, `--authenticationDatabase admin`) with the
 files from the backup; extract `opt-stacks.tgz` to `/opt` if needed. The Meilisearch and OpenSearch indexes are rebuilt.
+
+## Branding
+
+LibreChat has no setting for its logo and favicon – they are files in the image. The stack mounts its own files from
+`/opt/kira/branding/` read-only over them (`compose.yml`), so the image stays unchanged and updates keep the logo.
+
+| File in `branding/` | Size | Shown as |
+|---|---|---|
+| `favicon-16x16.png`, `favicon-32x32.png` | 16 / 32 px, transparent corners | browser tab |
+| `apple-touch-icon-180x180.png` | 180 px, square without transparency (iOS rounds it) | iPhone/iPad home screen |
+| `icon-192x192.png` | 192 px | installed app (Android, Chrome) |
+| `maskable-icon.png` | 512 px, square, symbol within the inner 80 % (Android crops to circle/squircle) | installed app (Android) |
+| `logo.svg` | any, square | login page |
+| `manifest.webmanifest` | – | name ("KIRA"), colours and icons of the installed app |
+
+The tab title comes from `APP_TITLE=KIRA` (setup.sh). To change the logo: replace the files (same names and sizes), run
+`bash /opt/kira/setup.sh` – it notices the change and restarts LibreChat (a replaced file only reaches the container
+after a restart). `scripts/self-test.sh` checks that the container serves the files from `branding/`.
+Browsers keep favicons for a long time: after a change reload hard (Ctrl+F5) or delete the site data; an installed
+KIRA app may have to be installed again.
 
 ## Troubleshooting
 
