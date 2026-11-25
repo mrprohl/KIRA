@@ -1,3 +1,5 @@
+<img src="kira/agents/10-kira.svg" alt="KIRA logo: a white speech bubble with a spark on an indigo tile" width="96">
+
 # KIRA
 
 Personal AI assistant on its own server: [LibreChat](https://www.librechat.ai) as the chat interface, fixed agents per
