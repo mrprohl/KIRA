@@ -10,7 +10,7 @@ The number at the beginning sets the order in the selection. New agent: copy a p
 | `TITLE` | display name in KIRA |
 | `DESCRIPTION` | subtitle in the selection |
 | `MODEL` | Bifrost model ID with provider, e.g. `anthropic/claude-sonnet-5-5`, `openai/gpt-6.1-sol` – must be allowed for the key `vk-librechat` in `/opt/bifrost/config/bifrost.json` (`setup.sh` checks it). Claude models run with prompt caching on the endpoint "Bifrost", other providers on "Bifrost OpenAI" etc. without it |
-| `ICON` | optional, image file in `agents/` (`.webp`, `.png`, `.jpg`, `.svg`, max. 256 KB) shown as the agent's icon |
+| `ICON` | optional, image file in `agents/` (`.webp`, `.png`, `.jpg`, `.svg`, max. 256 KB) shown as the agent's icon – the supplied icons are white symbols on a coloured circle (`<nn-name>.svg`); `40-images.png` is the same icon as avatar for the image agent |
 | `TEMPERATURE` | optional, 0 to 1 for Claude, 0 to 2 for OpenAI (low = factual, high = creative); Opus ignores it |
 | `DEFAULT` | `true` = preselected (only one agent) |
 | `WEB_SEARCH` | `true` = may search the internet (SearXNG + Firecrawl) |

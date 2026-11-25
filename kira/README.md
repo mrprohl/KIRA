@@ -175,7 +175,9 @@ Create the image agent once:
 2. As admin in KIRA: side panel **Agent Builder** ("Agenten erstellen") → new agent: name and description as
    `TITLE`/`DESCRIPTION` in `agents/40-images.env`, endpoint **Bild-Agent**, model `anthropic/claude-haiku-5-5`
    (the image comes from `IMAGE_MODEL`),
-   copy the instruction from `agents/40-images.md`, add the tool **"OpenAI Image Tools"**, save.
+   copy the instruction from `agents/40-images.md`, add the tool **"OpenAI Image Tools"**, upload
+   `agents/40-images.png` as the avatar (click the round picture at the top) – so the start page shows the same
+   icon as the other agents – and enter `KIRA` at "Ansprechpartner-Kontakt" (otherwise your name appears there), save.
 3. Share → **with everyone** (role "Viewer"). Copy the agent ID (`agent_…`).
 4. Enter it at `AGENT_ID=` in `agents/40-images.env`, then `/opt/kira/scripts/agent-builder.sh off`.
 
