@@ -32,19 +32,21 @@ Each model runs on its own vLLM server (one instance per server):
 |---|---|---|---|
 | Privacy checker | 1× A100 80 GB | `Qwen/Qwen3.5-35B-A3B` with KIRA's own checking prompt | MoE with 3 B active parameters: fast enough for every request, larger than a 4B and therefore more reliable |
 | Safety checker | 1× A100 80 GB | `Qwen/Qwen3Guard-Gen-8B` (categories built in) | the largest Qwen3Guard; fits easily |
-| Answer model | 6× A100 80 GB | the newest open Qwen that fits (see below) | tensor/pipeline parallel over six GPUs |
+| Answer model | 6× A100 80 GB | `Qwen/Qwen3.8-Flash-Next-FP8` (125 B MoE, 6 B active) – fallback `Qwen/Qwen3.8-27B` | see below; to be tested on the hardware |
 | Embeddings | own server | `Qwen/Qwen3-Embedding-0.6B` (or 4B/8B) | small; a larger GPU allows the 8B variant |
 
 Every model is a setting (`setup.env`), so a model can be replaced without code changes.
 
-**Answer model on 6× A100 (480 GB):** which Qwen version is open and fits must be checked at installation time
-(model card and licence on Hugging Face). Points to check:
-- size: weights + KV cache must fit into 480 GB, e.g. a ~400B MoE in FP8 is tight, in 4-bit (AWQ/GPTQ) comfortable;
-  trillion-parameter models do not fit;
-- six GPUs: vLLM's tensor parallelism needs a divisor of the model's attention heads – 6 often does not work, then
-  `--tensor-parallel-size 2 --pipeline-parallel-size 3` (or 3×2);
-- A100 (Ampere) has no native FP8: vLLM runs FP8 weights there as weight-only (works, slower than on H100);
-- licence: some newer Qwen models are under a community licence instead of Apache 2.0.
+**Answer model on 6× A100 (480 GB)** – figures from the model card as reported by third parties, check at installation:
+- `Qwen3.8-Flash-Next`: weights about 173 GiB in FP8, 335 GiB in BF16; new architecture (`qwen4_exp`) – needs a recent
+  vLLM. vLLM documents tensor parallelism over 4 GPUs; pipeline parallelism is not supported, so six GPUs cannot simply be
+  combined – start with FP8 on 4 GPUs (`--tensor-parallel-size 4`), the other two stay free or run a second instance.
+  A100 has no native FP8 (weight-only, slower than on H100) – if FP8 does not load, BF16 with expert parallelism over
+  six GPUs is the next test.
+- licence: Qwen Community License 1.0 (not Apache 2.0) – "preview of the Qwen4 architecture". Internal use is described
+  as permitted; offering it to third parties as a service needs a separate licence. Read the licence text yourself, this
+  is not legal advice.
+- `Qwen3.8-27B` (dense, Apache 2.0) is the simple fallback: fits on one or two A100.
 
 **Why two checkers:** the privacy checker follows our own rules (personal data, passwords, keys, internal addresses,
 customer data) – a general model with a prompt can be adjusted to them. Qwen3Guard is trained for harmful content and
