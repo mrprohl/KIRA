@@ -22,6 +22,7 @@ ENDPOINT = "Bifrost"               # name of the custom endpoint (invisible to u
 PROVIDER_LABELS = {"anthropic": "Anthropic", "openai": "OpenAI"}
 BIFROST_JSON = os.environ.get("BIFROST_JSON", "/opt/bifrost/config/bifrost.json")
 TITLE_MODEL = "anthropic/claude-haiku-5-5"
+TITLE_ALIAS = "kira/title"                          # with the privacy guard (title_alias in bifrost.json)
 # image agent (stored agent): own endpoint, so that builders (own agents) can use it without getting "Bifrost"
 IMAGE_ENDPOINT = "Bild-Agent"
 IMAGE_AGENT_MODEL = "anthropic/claude-haiku-5-5"   # only writes the image description
@@ -535,6 +536,7 @@ def main():
         "CONTEXT_USAGE": is_yes(s.get("CONTEXT_USAGE", "false"), "CONTEXT_USAGE", where),
         "AGENT_GROUPS": is_yes(s.get("AGENT_GROUPS", "false"), "AGENT_GROUPS", where),
         "UPLOAD_OFFICE_ONLY": is_yes(s.get("UPLOAD_OFFICE_ONLY", "false"), "UPLOAD_OFFICE_ONLY", where),
+        "PRIVACY_GUARD": is_yes(s.get("PRIVACY_GUARD", "false"), "PRIVACY_GUARD", where),
     }
     chat_retention = hours(s.get("CHAT_RETENTION"), "CHAT_RETENTION", where, 24, 8760)
     temp_retention = hours(s.get("TEMP_CHAT_RETENTION"), "TEMP_CHAT_RETENTION", where, 1, 8760, 24)
@@ -559,7 +561,9 @@ def main():
         "baseURL": "http://bifrost:8080/v1",
         "models": {"default": [m for m in models if provider_of(m) == "anthropic"], "fetch": False},
         "titleConvo": True,
-        "titleModel": TITLE_MODEL,
+        # privacy guard: titles ask for an alias – the guard sends them to TITLE_MODEL or, with personal data, to the
+        # local model, and adds no notice to titles (kira/PRIVACY-GUARD.md)
+        "titleModel": TITLE_ALIAS if setup["PRIVACY_GUARD"] else TITLE_MODEL,
         "modelDisplayLabel": "KIRA",
         # prompt caching for Claude: top-level cache_control = automatic caching at Anthropic (Bifrost passes it
         # through). Repeated parts (history, search results) then cost about 1/10. Only on Claude endpoints.

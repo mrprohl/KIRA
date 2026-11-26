@@ -14,6 +14,7 @@
 # ALLOW_DNS (DNS servers of the host, port 53 only – Docker forwards the containers' DNS there).
 # LIBRECHAT_ONLY_DST: if set (Keycloak in the LAN), LibreChat (kira-outbound) gets no internet at all – only these
 # destinations on port 443 plus DNS. Everything else LibreChat needs runs over the internal networks.
+# BIFROST_LAN_DST: privacy guard – vLLM servers in the LAN (ip:port) that only Bifrost (bifrost-outbound) may reach.
 # ============================================================================
 set -euo pipefail
 
@@ -23,6 +24,7 @@ CHAIN_LC=KIRA-EGRESS-LIBRECHAT
 # kira-edge (Caddy), bifrost-outbound, kira-outbound, websearch-outbound, onyx-outbound – see the stacks' compose.yml
 SOURCES=(172.31.60.0/24 172.31.61.0/24 172.31.62.0/24 172.31.63.0/24 172.31.64.0/24)
 LC_SOURCE=172.31.62.0/24
+BIFROST_SOURCE=172.31.61.0/24
 # networks that may reach Keycloak in the LAN: LibreChat (login) and Onyx (optional SSO in its admin area)
 KC_SOURCES=("$LC_SOURCE" 172.31.64.0/24)
 PRIVATE=(0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4)
@@ -30,6 +32,7 @@ CONF=/opt/kira/config/egress.env
 ALLOW_PRIVATE_DST=""
 ALLOW_DNS=""
 LIBRECHAT_ONLY_DST=""
+BIFROST_LAN_DST=""
 # shellcheck source=/dev/null
 [ -f "$CONF" ] && . "$CONF"
 
@@ -54,6 +57,10 @@ apply() {
     for src in "${KC_SOURCES[@]}"; do
       iptables -A "$CHAIN" -s "$src" -d "$ip" -p tcp --dport 443 -j RETURN
     done
+  done
+  # privacy guard: Bifrost to the vLLM servers in the LAN, exactly ip:port
+  for dst in $BIFROST_LAN_DST; do
+    iptables -A "$CHAIN" -s "$BIFROST_SOURCE" -d "${dst%:*}" -p tcp --dport "${dst##*:}" -j RETURN
   done
   for net in "${PRIVATE[@]}"; do
     iptables -A "$CHAIN" -d "$net" -j DROP
@@ -95,6 +102,7 @@ apply() {
   done
   echo "LAN block active: ${SOURCES[*]} -> no private destinations${ALLOW_PRIVATE_DST:+ (exception: $ALLOW_PRIVATE_DST:443 for LibreChat and Onyx)}."
   [ -z "$LIBRECHAT_ONLY_DST" ] || echo "LibreChat ($LC_SOURCE): no internet – only $LIBRECHAT_ONLY_DST:443 and DNS."
+  [ -z "$BIFROST_LAN_DST" ] || echo "Bifrost ($BIFROST_SOURCE): additionally the vLLM servers $BIFROST_LAN_DST (privacy guard)."
 }
 
 remove() {

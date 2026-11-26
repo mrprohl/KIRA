@@ -150,6 +150,7 @@ restarts the affected services.
 | `KEYCLOAK_INTERNAL_IP` | Keycloak directly in the LAN (extra_hosts + exception in the LAN block); LibreChat then gets no internet, only Keycloak:443 and DNS |
 | `LLM_API_DOMAIN`, `BIFROST_UI_DOMAIN` (+ `…_ALLOWED_IPS`) | LLM API for external applications and Bifrost web interface from outside |
 | `AGENT_BUILDER` | only switch via `scripts/agent-builder.sh on|off` |
+| `PRIVACY_GUARD`, `GUARD_*` | privacy guard with own LLMs on vLLM servers: personal/secret data answered locally, harmful requests refused – [PRIVACY-GUARD.md](PRIVACY-GUARD.md). `false` = as without it |
 
 ## Agents
 
@@ -359,6 +360,7 @@ OpenSearch needs `vm.max_map_count=262144` on the host (for LXC set it on the Pr
 | Backup | daily at 02:30 to `/var/backups/kira/<date>/` (Bifrost DB, MongoDB, RAG, Onyx DB, uploads, `/opt` stacks incl. secrets), 14 days; push "KIRA Backup" |
 | Versions | edit `/opt/<stack>/env/versions.env`, redeploy the stack. Back up first. Pinned versions instead of `latest` where possible |
 | Caddy | site blocks `/opt/caddy/config/sites/*.caddy` freely editable, `docker exec caddy caddy reload --config /etc/caddy/Caddyfile` |
+| Privacy guard | decisions `docker logs bifrost 2>&1 \| grep 'privacy-guard mode='`, counts `scripts/privacy-report.sh` – [PRIVACY-GUARD.md](PRIVACY-GUARD.md) |
 | Logo and favicon | replace the files in `/opt/kira/branding/`, `bash /opt/kira/setup.sh` (restarts LibreChat) – section "Branding" |
 
 **Restore** (stop the stack, start only the database): `pg_restore -U postgres -d bifrost --clean` or

@@ -6,7 +6,8 @@
 #   db          PostgreSQL for Bifrost only (configuration, logs)
 #
 # Networks:
-#   bifrost-outbound 172.31.61.0/24  internet (Anthropic, OpenAI, price list) – LAN/host blocked (LAN block)
+#   bifrost-outbound 172.31.61.0/24  internet (Anthropic, OpenAI, price list) – LAN/host blocked (LAN block);
+#                                    with the privacy guard also the vLLM servers in the LAN (exact host:port only)
 #   kira-llm         internal, created externally   clients: LibreChat, RAG API, Onyx
 #   kira-proxy       internal, created externally   Caddy (LLM API for external services, Bifrost web interface)
 #   backend          internal                       bifrost <-> db
@@ -25,7 +26,8 @@ services:
     <<: *hardening
     container_name: bifrost
     hostname: bifrost
-    image: maximhq/bifrost:${BIFROST_TAG:?set in env/versions.env}
+    # BIFROST_IMAGE is set by setup.sh only with the privacy guard (own build with plugin, kira/PRIVACY-GUARD.md)
+    image: ${BIFROST_IMAGE:-maximhq/bifrost:${BIFROST_TAG:?set in env/versions.env}}
     user: "1000:0"               # as in the image; no capabilities needed
     cap_drop: [ALL]
     read_only: true

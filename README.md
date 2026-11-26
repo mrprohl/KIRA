@@ -14,9 +14,10 @@ The folders are extracted to `/opt` on the server, one Docker Compose stack each
 |---|---|
 | [`kira/`](kira/) | LibreChat, `setup.sh` (sets up all stacks), scripts, agents, branding (logo, favicon), documentation |
 | [`caddy/`](caddy/) | reverse proxy with Let's Encrypt |
-| [`bifrost/`](bifrost/) | LLM gateway with virtual keys and budgets |
+| [`bifrost/`](bifrost/) | LLM gateway with virtual keys and budgets; `plugins/privacy-guard/` for the optional privacy guard |
 | [`websearch/`](websearch/) | SearXNG and Firecrawl |
 | [`onyx/`](onyx/) | optional intranet search (SharePoint and more) |
+| [`vllm/`](vllm/) | templates for the GPU servers of the optional privacy guard (not for the KIRA server) |
 
 ## Documentation
 
@@ -24,7 +25,8 @@ The folders are extracted to `/opt` on the server, one Docker Compose stack each
 - [kira/INSTALL.md](kira/INSTALL.md) – installation step by step
 - [kira/NETWORK.md](kira/NETWORK.md) – networks and containers
 - [kira/SECURITY.md](kira/SECURITY.md) – security review
-- [kira/PRIVACY-GUARD.md](kira/PRIVACY-GUARD.md) – optional privacy guard with local models (design)
+- [kira/PRIVACY-GUARD.md](kira/PRIVACY-GUARD.md) – optional privacy guard with own LLMs (vLLM)
+- [vllm/README.md](vllm/README.md) – setting up the vLLM servers for it
 - [kira/agents/README.md](kira/agents/README.md) – defining agents
 
 ## Quick start

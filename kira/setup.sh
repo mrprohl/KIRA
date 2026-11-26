@@ -212,6 +212,7 @@ DOMAIN_RE='^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A
 IPV4_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 IPLIST_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?( +([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?)*$'
 MODEL_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+VLLM_URL_RE='^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$'
 URL_RE='^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[^[:space:]"$`\\]*)?$'
 
 is_private_ip() {
@@ -283,6 +284,18 @@ if is_true SPEECH; then
     ensure_optional TTS_VOICE "Default voice for all users (alloy, ash, coral, echo, fable, nova, onyx, sage, shimmer; empty = fable)" \
       '^(alloy|ash|coral|echo|fable|nova|onyx|sage|shimmer)$' "Allowed: alloy, ash, coral, echo, fable, nova, onyx, sage, shimmer."
   fi
+fi
+
+ensure_yesno PRIVACY_GUARD "Privacy guard: check every request with own LLMs (vLLM) – personal or secret data is answered locally, harmful requests are refused? (kira/PRIVACY-GUARD.md)"
+if is_true PRIVACY_GUARD; then
+  info "Privacy guard: addresses of the vLLM servers (one model each, served under the names kira-privacy, kira-safety,"
+  info "kira-answer, kira-embedding – vllm/README.md). Form http://IP:port; Bifrost may reach exactly these."
+  ensure_text GUARD_PRIVACY_URL "vLLM address of the privacy checker (e.g. http://10.0.0.50:8101)" "$VLLM_URL_RE" "Form http://host:port."
+  ensure_text GUARD_SAFETY_URL "vLLM address of the safety checker, Qwen3Guard (e.g. http://10.0.0.51:8102)" "$VLLM_URL_RE" "Form http://host:port."
+  ensure_text GUARD_ANSWER_URL "vLLM address of the local answer model (e.g. http://10.0.0.52:8103)" "$VLLM_URL_RE" "Form http://host:port."
+  ensure_text GUARD_EMBEDDING_URL "vLLM address of the embedding model (usually on the privacy server, e.g. http://10.0.0.50:8104)" "$VLLM_URL_RE" "Form http://host:port."
+  ensure_optional GUARD_MODE "Mode: observe (only decide and count – start with this) or enforce (empty = observe)" '^(observe|enforce)$' "observe or enforce."
+  ensure_yesno GUARD_SLACK "Privacy guard: weekly counts (no content) to Slack?"
 fi
 
 ensure_yesno AGENT_GROUPS "Restrict agents per Keycloak group? (mapping in agents/groups.env, needs the \"groups\" claim in Keycloak)"
@@ -423,6 +436,16 @@ EOF
 fi
 VK_LIBRECHAT=$(env_get "$BIFROST/env/bifrost.env" VK_LIBRECHAT)
 [ -n "$VK_LIBRECHAT" ] || die "VK_LIBRECHAT is missing in $BIFROST/env/bifrost.env."
+if is_true PRIVACY_GUARD && [ -z "$(env_get "$BIFROST/env/bifrost.env" VLLM_API_KEY)" ]; then
+  info "Privacy guard: API key of the vLLM servers (vllm serve … --api-key <key>, the same on all of them)."
+  ask_optional VLLM_KEY "vLLM API key (empty = generate one now)" secret
+  if [ -z "$VLLM_KEY" ]; then
+    VLLM_KEY=$(random_hex 24)
+    info "New key generated – put it into the env files of the vLLM servers (grep ^VLLM_API_KEY $BIFROST/env/bifrost.env)."
+  fi
+  env_set "$BIFROST/env/bifrost.env" VLLM_API_KEY "$VLLM_KEY"
+  unset VLLM_KEY
+fi
 
 BIFROST_JSON=$BIFROST/config/bifrost.json
 HASH_BIFROST_BEFORE=$(file_hash "$BIFROST_JSON")
@@ -542,6 +565,11 @@ fi
 ORIGINS=""
 [ -n "$(setup_get BIFROST_UI_DOMAIN)" ] && ORIGINS="https://$(setup_get BIFROST_UI_DOMAIN)"
 log_days=$(days_of "$(setup_get BIFROST_LOG_RETENTION)" 1 3650 || echo 90)
+GUARD_ON=false; is_true PRIVACY_GUARD && GUARD_ON=true
+GUARD_ON=$GUARD_ON GUARD_MODE=$(setup_get GUARD_MODE) GUARD_PRIVACY_URL=$(setup_get GUARD_PRIVACY_URL) \
+GUARD_SAFETY_URL=$(setup_get GUARD_SAFETY_URL) GUARD_ANSWER_URL=$(setup_get GUARD_ANSWER_URL) \
+GUARD_EMBEDDING_URL=$(setup_get GUARD_EMBEDDING_URL) GUARD_TIMEOUT=$(setup_get GUARD_TIMEOUT) \
+GUARD_BLOCK_CATEGORIES=$(setup_get GUARD_BLOCK_CATEGORIES) GUARD_LOG_CATEGORIES=$(setup_get GUARD_LOG_CATEGORIES) \
 SEND_HEADERS=$(setup_get SEND_USER_HEADERS) LOG_CONTENT=$(setup_get LOG_CHAT_CONTENT) LOG_DAYS=${log_days:-90} \
 EXTRA_MODELS=$EXTRA_MODELS ORIGINS=$ORIGINS python3 -I - "$BIFROST_JSON" <<'PY'
 import json, os, sys
@@ -570,11 +598,52 @@ for vk in c.get("governance", {}).get("virtual_keys", []):
             for m in extra:
                 if m not in allowed:
                     allowed.append(m)
+# Privacy guard (kira/PRIVACY-GUARD.md): vLLM provider (local answers, embeddings), vk-librechat may use it, plugin.
+# Switched off: all three are removed again, Bifrost works as before.
+E = os.environ
+lc_vk = next((v for v in c.get("governance", {}).get("virtual_keys", []) if v.get("id") == "vk-librechat"), None)
+plugins = [x for x in c.get("plugins", []) if x.get("name") != "privacy-guard"]
+if E["GUARD_ON"] == "true":
+    def vkey(name, model, url):
+        return {"name": name, "value": "env.VLLM_API_KEY", "weight": 1, "models": [model],
+                "vllm_key_config": {"url": url.rstrip("/"), "model_name": model}}
+    c.setdefault("providers", {})["vllm"] = {
+        "keys": [vkey("vllm-answer", "kira-answer", E["GUARD_ANSWER_URL"]),
+                 vkey("vllm-embedding", "kira-embedding", E["GUARD_EMBEDDING_URL"])],
+        # vLLM is in the LAN: Bifrost blocks private addresses unless allowed; long local answers need time
+        "network_config": {"allow_private_network": True, "default_request_timeout_in_seconds": 600,
+                           "stream_idle_timeout_in_seconds": 300, "max_retries": 0}}
+    if lc_vk is not None:
+        pcs = [x for x in lc_vk.get("provider_configs", []) if x.get("provider") != "vllm"]
+        pcs.append({"provider": "vllm", "weight": 1, "key_ids": ["*"], "allowed_models": ["kira-answer", "kira-embedding"]})
+        lc_vk["provider_configs"] = pcs
+    split = lambda s, d: [x.strip() for x in (s or d).split(",") if x.strip()]
+    plugins.append({"enabled": True, "name": "privacy-guard", "path": "/app/plugins/privacy-guard.so",
+                    "placement": "pre_builtin", "order": 0, "config": {
+        "mode": E["GUARD_MODE"] or "observe",
+        "privacy_url": E["GUARD_PRIVACY_URL"].rstrip("/"), "privacy_model": "kira-privacy",
+        "safety_url": E["GUARD_SAFETY_URL"].rstrip("/"), "safety_model": "kira-safety",
+        "answer_model": "vllm/kira-answer",
+        "title_alias": "kira/title", "title_model": "anthropic/claude-haiku-5-5",
+        "api_key_env": "VLLM_API_KEY", "guarded_key_envs": ["VK_LIBRECHAT"],
+        "timeout_seconds": int(E["GUARD_TIMEOUT"] or 8),
+        "block_categories": split(E["GUARD_BLOCK_CATEGORIES"],
+            "Violent,Non-violent Illegal Acts,Sexual Content or Sexual Acts,Suicide & Self-Harm,Jailbreak"),
+        "log_categories": split(E["GUARD_LOG_CATEGORIES"],
+            "Unethical Acts,Politically Sensitive Topics,Copyright Violation")}})
+else:
+    c.get("providers", {}).pop("vllm", None)
+    if lc_vk is not None:
+        lc_vk["provider_configs"] = [x for x in lc_vk.get("provider_configs", []) if x.get("provider") != "vllm"]
+if plugins:
+    c["plugins"] = plugins
+else:
+    c.pop("plugins", None)
 if json.dumps(c, sort_keys=True) != before:
     with open(p, "w", encoding="utf-8") as fh:
         json.dump(c, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
-    print("bifrost.json: logging switches, retention and/or models (embeddings/images/speech) updated.")
+    print("bifrost.json: logging switches, retention, models (embeddings/images/speech) and/or privacy guard updated.")
 PY
 chmod 644 "$BIFROST_JSON"
 HASH_BIFROST_AFTER=$(file_hash "$BIFROST_JSON")
@@ -582,6 +651,7 @@ HASH_BIFROST_AFTER=$(file_hash "$BIFROST_JSON")
 # ---------------------------------------------------------------- 4. KIRA / LibreChat
 section "KIRA (LibreChat)"
 LC_ENV=$KIRA/env/librechat.env
+LC_EXISTED=false; [ -f "$LC_ENV" ] && LC_EXISTED=true
 if [ -f "$LC_ENV" ]; then
   info "kira/env/librechat.env exists – secrets unchanged."
 else
@@ -709,6 +779,19 @@ else
   env_set "$LC_ENV" LIMIT_MESSAGE_USER true
   env_set "$LC_ENV" MESSAGE_USER_MAX "$msg_limit"
   env_set "$LC_ENV" MESSAGE_USER_WINDOW 1
+fi
+# Document search: with the privacy guard the embeddings are computed locally (vLLM), otherwise by OpenAI
+RAG_ENV=$KIRA/env/rag.env
+EMB_BEFORE=$(env_get "$RAG_ENV" EMBEDDINGS_MODEL)
+if is_true PRIVACY_GUARD; then
+  env_set "$RAG_ENV" EMBEDDINGS_MODEL "vllm/kira-embedding"
+  env_set "$RAG_ENV" RAG_CHECK_EMBEDDING_CTX_LENGTH false   # no OpenAI tokenizer: send text, not token IDs
+else
+  env_set "$RAG_ENV" EMBEDDINGS_MODEL "openai/$EMBEDDING_MODEL"
+  env_set "$RAG_ENV" RAG_CHECK_EMBEDDING_CTX_LENGTH true
+fi
+if [ "$LC_EXISTED" = true ] && [ -n "$EMB_BEFORE" ] && [ "$EMB_BEFORE" != "$(env_get "$RAG_ENV" EMBEDDINGS_MODEL)" ]; then
+  warn "Document search: embedding model changed ($EMB_BEFORE -> $(env_get "$RAG_ENV" EMBEDDINGS_MODEL)). Documents uploaded before cannot be searched any more – users have to upload them again."
 fi
 # Help link in the user menu ("/" hides the entry)
 help_url=$(setup_get HELP_URL); env_set "$LC_ENV" HELP_AND_FAQ_URL "${help_url:-/}"
@@ -1036,6 +1119,20 @@ ALLOW=$(printf '%s\n' $ALLOW | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ $//
 LC_ONLY="$ALLOW"
 RESOLV=/etc/resolv.conf; [ -f /run/systemd/resolve/resolv.conf ] && RESOLV=/run/systemd/resolve/resolv.conf
 DNS=$(awk '$1=="nameserver" && $2 !~ /^127\./ && $2 !~ /:/ {print $2}' "$RESOLV" | sort -u | tr '\n' ' ' | sed 's/ $//')
+# Privacy guard: Bifrost may reach exactly the vLLM servers (host:port) in the LAN
+GUARD_DST=""
+if is_true PRIVACY_GUARD; then
+  for key in GUARD_PRIVACY_URL GUARD_SAFETY_URL GUARD_ANSWER_URL GUARD_EMBEDDING_URL; do
+    url=$(setup_get "$key"); hp=${url#*://}; hp=${hp%%/*}; host=${hp%%:*}; port=${hp##*:}
+    [ "$port" = "$hp" ] && { case "$url" in https:*) port=443 ;; *) port=80 ;; esac; }
+    if [[ $host =~ $IPV4_RE ]]; then ips=$host
+    else ips=$( { getent ahostsv4 "$host" 2>/dev/null || true; } | awk '{print $1}' | sort -u | tr '\n' ' '); fi
+    [ -n "$ips" ] || warn "Privacy guard: $host ($key) cannot be resolved – no firewall exception."
+    for ip in $ips; do GUARD_DST="$GUARD_DST $ip:$port"; done
+  done
+  # shellcheck disable=SC2086  # word splitting intended
+  GUARD_DST=$(printf '%s\n' $GUARD_DST | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ $//')
+fi
 umask 022
 cat > "$EGRESS_ENV" <<EOF
 # LAN block – generated by setup.sh on every run (do not edit by hand)
@@ -1045,6 +1142,8 @@ ALLOW_PRIVATE_DST="$ALLOW"
 ALLOW_DNS="$DNS"
 # Keycloak in the LAN: LibreChat gets no internet, only Keycloak:443 and DNS (empty = internet as the other stacks)
 LIBRECHAT_ONLY_DST="$LC_ONLY"
+# Privacy guard: vLLM servers in the LAN that Bifrost (bifrost-outbound) may reach, as ip:port (empty = none)
+BIFROST_LAN_DST="$GUARD_DST"
 EOF
 umask 077
 UNIT=/etc/systemd/system/kira-egress-firewall.service
@@ -1143,6 +1242,12 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # on the 1st of the month at 08:05: costs per user and key (previous month) to Slack
 5 8 1 * * root /opt/kira/scripts/usage-report.sh 2>&1 | logger -t kira-usage
 EOF
+  if is_true PRIVACY_GUARD && is_true GUARD_SLACK; then
+    cat >> /etc/cron.d/kira <<'EOF'
+# Mondays at 08:10: privacy guard counts of the last week (no content) to Slack
+10 8 * * 1 root /opt/kira/scripts/privacy-report.sh 2>&1 | logger -t kira-privacy
+EOF
+  fi
   umask 077
   info "/etc/cron.d/kira written."
   command -v cron >/dev/null || command -v crond >/dev/null \
@@ -1159,6 +1264,39 @@ done
 chmod 644 "$KIRA/config/librechat.yaml" "$EGRESS_ENV" "$BIFROST_JSON" "$CADDY/config/Caddyfile"
 chmod 700 "$KIRA/scripts"
 chmod 755 "$KIRA/scripts"/*.sh "$KIRA/scripts"/*.py
+
+# ---------------------------------------------------------------- 11b. Privacy guard: Bifrost image with the plugin
+VERSIONS_BF=$BIFROST/env/versions.env
+if is_true PRIVACY_GUARD; then
+  section "Privacy guard (Bifrost with plugin)"
+  BF_TAG=$(env_get "$VERSIONS_BF" BIFROST_TAG)
+  PG_DIR=$BIFROST/plugins/privacy-guard
+  [ -f "$PG_DIR/Dockerfile" ] || die "$PG_DIR is missing – copy it from the package."
+  # image tag = Bifrost version + hash of the plugin sources: a new plugin or Bifrost version builds a new image
+  PG_HASH=$(cd "$PG_DIR" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-10)
+  GUARD_IMAGE="kira/bifrost-guard:${BF_TAG}-${PG_HASH}"
+  if docker image inspect "$GUARD_IMAGE" >/dev/null 2>&1; then
+    info "Image $GUARD_IMAGE exists."
+  else
+    info "Building $GUARD_IMAGE – Bifrost $BF_TAG with the privacy-guard plugin (takes 5–15 minutes) …"
+    # the same base images as the official Bifrost build of this version (Go plugins need identical toolchains)
+    UPSTREAM=$(curl -fsSL -m 30 "https://raw.githubusercontent.com/maximhq/bifrost/transports/$BF_TAG/transports/Dockerfile") \
+      || die "Official Bifrost Dockerfile for $BF_TAG not reachable (GitHub) – check BIFROST_TAG in $VERSIONS_BF."
+    FROMS=$(printf '%s\n' "$UPSTREAM" | sed -n 's/^[[:space:]]*FROM[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p')
+    NODE_IMG=$(printf '%s\n' "$FROMS" | grep '^node:' | head -1 || true)
+    GO_IMG=$(printf '%s\n' "$FROMS" | grep '^golang:' | head -1 || true)
+    RT_IMG=$(printf '%s\n' "$FROMS" | grep '^alpine:' | tail -1 || true)
+    [ -n "$NODE_IMG" ] && [ -n "$GO_IMG" ] && [ -n "$RT_IMG" ] \
+      || die "Base images not found in the official Dockerfile of Bifrost $BF_TAG – the build has to be adapted (kira/PRIVACY-GUARD.md)."
+    docker build --build-arg BIFROST_TAG="$BF_TAG" --build-arg NODE_IMAGE="$NODE_IMG" --build-arg GO_IMAGE="$GO_IMG" \
+      --build-arg RUNTIME_IMAGE="$RT_IMG" -t "$GUARD_IMAGE" "$PG_DIR" \
+      || die "Build of $GUARD_IMAGE failed – details above (kira/PRIVACY-GUARD.md, section Troubleshooting)."
+    info "Image $GUARD_IMAGE built."
+  fi
+  env_set "$VERSIONS_BF" BIFROST_IMAGE "$GUARD_IMAGE"
+else
+  sed -i '/^BIFROST_IMAGE=/d' "$VERSIONS_BF" 2>/dev/null || true   # official image as before
+fi
 
 # ---------------------------------------------------------------- 12. Start
 section "Start"
@@ -1182,7 +1320,11 @@ if [ "$START" = true ]; then
   for s in "${STACKS[@]}"; do
     f=/opt/$s/docker-compose.yml
     info "--- $s: pulling images"
-    docker compose -f "$f" pull || die "images for $s could not be pulled – check the tag in /opt/$s/env/versions.env."
+    if [ "$s" = bifrost ] && is_true PRIVACY_GUARD; then
+      docker compose -f "$f" pull db || die "images for $s could not be pulled – check the tag in /opt/$s/env/versions.env."
+    else
+      docker compose -f "$f" pull || die "images for $s could not be pulled – check the tag in /opt/$s/env/versions.env."
+    fi
     info "--- $s: starting"
     docker compose -f "$f" up -d --remove-orphans || die "starting $s failed – docker compose -f $f logs"
   done

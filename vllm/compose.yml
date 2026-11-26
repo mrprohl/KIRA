@@ -1,0 +1,52 @@
+# ============================================================================
+# vLLM – ONE model per instance, for the KIRA privacy guard (kira/PRIVACY-GUARD.md). Runs on a GPU server, NOT on the
+# KIRA server. One env file per instance (templates *.env.example), started with:
+#
+#   docker compose --env-file privacy.env up -d       (project name, container and port come from the env file)
+#
+# Requires: NVIDIA driver + NVIDIA Container Toolkit, Docker Compose ≥ 2.20. The API key comes from the environment
+# (VLLM_API_KEY – vLLM reads it itself, so it is not visible in the process list).
+# ============================================================================
+name: ${STACK_NAME:?set in the env file}
+
+services:
+  vllm:
+    image: vllm/vllm-openai:${VLLM_TAG:?set in the env file}
+    container_name: ${STACK_NAME}
+    restart: unless-stopped
+    ipc: host                    # shared memory for tensor parallelism (NCCL)
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${PORT:?set in the env file}:8000"
+    environment:
+      VLLM_API_KEY: ${VLLM_API_KEY:?set in the env file – the same key as VLLM_API_KEY in /opt/bifrost/env/bifrost.env}
+      HF_TOKEN: ${HF_TOKEN:-}
+      CUDA_VISIBLE_DEVICES: ${GPU_DEVICES:-0}
+      VLLM_NO_USAGE_STATS: "1"
+      DO_NOT_TRACK: "1"
+    volumes:
+      - ${MODEL_CACHE:-/opt/vllm/cache}:/root/.cache/huggingface
+    command: >-
+      --model ${MODEL:?set in the env file}
+      --served-model-name ${SERVED_NAME:?set in the env file}
+      --port 8000
+      --tensor-parallel-size ${TP_SIZE:-1}
+      --gpu-memory-utilization ${GPU_MEM:-0.90}
+      --max-model-len ${MAX_MODEL_LEN:-32768}
+      ${EXTRA_ARGS:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 1800s        # first start downloads the model (can be hundreds of GB)

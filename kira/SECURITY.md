@@ -60,6 +60,10 @@ accepted and listed below.
 - CORS (`allowed_origins`) only for the Bifrost interface itself – scripts on other pages, including the KIRA page,
   cannot use the admin API with a logged-in admin's session.
 - Chat contents are not logged unless switched on (`LOG_CHAT_CONTENT`); log retention configurable.
+- Optional privacy guard ([PRIVACY-GUARD.md](PRIVACY-GUARD.md)): requests with personal or secret data are answered
+  by a local model, harmful requests refused; fail-closed when a checker is down. Bifrost then runs as an own build with
+  the plugin and may reach exactly the vLLM servers in the LAN (ip:port). The checkers are language models – no
+  guarantee, the data processing agreements stay necessary.
 
 ### Networks and egress
 

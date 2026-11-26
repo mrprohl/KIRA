@@ -63,7 +63,7 @@ The Onyx containers only run when Onyx is enabled in the setup; otherwise `kira-
 |---|---|---|
 | `kira-edge` | Caddy | Let's Encrypt |
 | `kira-outbound` | LibreChat | Keycloak only (with Keycloak in the LAN nothing else) |
-| `bifrost-outbound` | Bifrost | Anthropic, OpenAI |
+| `bifrost-outbound` | Bifrost | Anthropic, OpenAI; with the privacy guard also the four vLLM servers in the LAN (exactly ip:port, `BIFROST_LAN_DST`) |
 | `websearch-outbound` | SearXNG, Firecrawl, browser | search engines, web pages |
 | `onyx-outbound` | Onyx API, indexing, models | SharePoint/Graph, Hugging Face, Keycloak (optional SSO) |
 

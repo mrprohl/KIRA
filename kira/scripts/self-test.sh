@@ -118,6 +118,32 @@ else
       POST http://bifrost:8080/v1/chat/completions "$VK" \
       '{"model":"anthropic/claude-haiku-5-5","max_tokens":5,"messages":[{"role":"user","content":"Just say: ok"}]}'
   fi
+  if [ "$(setup_get PRIVACY_GUARD)" = "true" ]; then
+    echo "== Privacy guard =="
+    mode=$(setup_get GUARD_MODE); mode=${mode:-observe}
+    if docker logs bifrost 2>&1 | grep -q "privacy-guard: active, mode=$mode"; then ok "plugin loaded (mode $mode)"
+    else bad "plugin not loaded or old mode"; hint "docker logs bifrost 2>&1 | grep -i -E 'plugin|privacy-guard' – image BIFROST_IMAGE in /opt/bifrost/env/versions.env, then docker restart bifrost"; fi
+    for pair in GUARD_PRIVACY_URL:kira-privacy GUARD_SAFETY_URL:kira-safety GUARD_ANSWER_URL:kira-answer GUARD_EMBEDDING_URL:kira-embedding; do
+      url=$(setup_get "${pair%%:*}"); model=${pair##*:}; url=${url%/}
+      # from inside Bifrost (same network and firewall as in operation); the key is in its environment
+      res=$(docker exec bifrost sh -c 'wget -q -T 10 -O - --header "Authorization: Bearer $VLLM_API_KEY" "$0/v1/models"' "$url" 2>&1)
+      if [[ $res == *"\"$model\""* ]]; then ok "Bifrost -> vLLM $model ($url)"
+      else bad "Bifrost -> vLLM $model ($url): ${res:0:150}"
+        hint "vLLM on that server running with --served-model-name $model and the same --api-key? Firewall: BIFROST_LAN_DST in config/egress.env"; fi
+    done
+    check_http "LibreChat -> Bifrost -> local embeddings (kira-embedding)" '^200 ' \
+      "docker logs --tail 50 bifrost; vLLM of kira-embedding started with --task embed?" \
+      POST http://bifrost:8080/v1/embeddings "$VK" '{"model":"vllm/kira-embedding","input":"Selbsttest"}'
+    if [ "${1:-}" = "--request" ]; then
+      # a test IBAN (from the documentation of the German banks) must be recognised: local (enforce) or counted (observe)
+      lc_fetch POST http://bifrost:8080/v1/chat/completions "$VK" \
+        '{"model":"anthropic/claude-haiku-5-5","max_tokens":10,"messages":[{"role":"user","content":"KIRA-Selbsttest: DE89 3704 0044 0532 0130 00 – antworte nur mit OK."}]}' >/dev/null
+      sleep 3
+      if docker logs --since 2m bifrost 2>&1 | grep -q 'privacy-guard mode=[a-z]* decision=local endpoint=chat categories=[a-z_,-]*iban'; then
+        ok "test request with an IBAN recognised (decision local)"
+      else bad "test request with an IBAN not recognised"; hint "docker logs --since 5m bifrost 2>&1 | grep privacy-guard"; fi
+    fi
+  fi
 fi
 
 echo "== Caddy =="
