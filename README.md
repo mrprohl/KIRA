@@ -24,6 +24,7 @@ The folders are extracted to `/opt` on the server, one Docker Compose stack each
 - [kira/INSTALL.md](kira/INSTALL.md) – installation step by step
 - [kira/NETWORK.md](kira/NETWORK.md) – networks and containers
 - [kira/SECURITY.md](kira/SECURITY.md) – security review
+- [kira/PRIVACY-GUARD.md](kira/PRIVACY-GUARD.md) – optional privacy guard with local models (design)
 - [kira/agents/README.md](kira/agents/README.md) – defining agents
 
 ## Quick start
