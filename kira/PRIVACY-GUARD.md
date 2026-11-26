@@ -24,17 +24,27 @@ model as well. The guard is off by default; `setup.sh` asks for it.
 | Firewall | exception: Bifrost may reach exactly the four vLLM addresses (host:port), nothing else in the LAN | `scripts/egress-firewall.sh` |
 | Slack report | counts per category, can be switched off | `scripts/privacy-report.sh` (cron) |
 
-## Models (example: all four on one server with an A100 80 GB)
+## Models and servers
 
-| Role | Model | Port in the template | GPU share (starting value, measure) |
+Each model runs on its own vLLM server (one instance per server):
+
+| Role | Server | Model (proposal, a setting) | Notes |
 |---|---|---|---|
-| Privacy checker | `Qwen/Qwen3.5-4B` with KIRA's own checking prompt | 8101 | 0.12 |
-| Safety checker | `Qwen/Qwen3Guard-Gen-4B` (categories built in) | 8102 | 0.12 |
-| Answer model | `Qwen/Qwen3.5-35B-A3B` (MoE, 3 B active – fast), FP8 | 8103 | 0.60 |
-| Embeddings | `Qwen/Qwen3-Embedding-0.6B` | 8104 | 0.06 |
+| Privacy checker | 1× A100 80 GB | `Qwen/Qwen3.5-35B-A3B` with KIRA's own checking prompt | MoE with 3 B active parameters: fast enough for every request, larger than a 4B and therefore more reliable |
+| Safety checker | 1× A100 80 GB | `Qwen/Qwen3Guard-Gen-8B` (categories built in) | the largest Qwen3Guard; fits easily |
+| Answer model | 6× A100 80 GB | the newest open Qwen that fits (see below) | tensor/pipeline parallel over six GPUs |
+| Embeddings | own server | `Qwen/Qwen3-Embedding-0.6B` (or 4B/8B) | small; a larger GPU allows the 8B variant |
 
-Every model is a setting (`setup.env`), so a model can be replaced without code changes. With a smaller GPU (e.g. RTX
-3090, 24 GB) the checkers become 0.6B models and the answer model Qwen3.5-9B.
+Every model is a setting (`setup.env`), so a model can be replaced without code changes.
+
+**Answer model on 6× A100 (480 GB):** which Qwen version is open and fits must be checked at installation time
+(model card and licence on Hugging Face). Points to check:
+- size: weights + KV cache must fit into 480 GB, e.g. a ~400B MoE in FP8 is tight, in 4-bit (AWQ/GPTQ) comfortable;
+  trillion-parameter models do not fit;
+- six GPUs: vLLM's tensor parallelism needs a divisor of the model's attention heads – 6 often does not work, then
+  `--tensor-parallel-size 2 --pipeline-parallel-size 3` (or 3×2);
+- A100 (Ampere) has no native FP8: vLLM runs FP8 weights there as weight-only (works, slower than on H100);
+- licence: some newer Qwen models are under a community licence instead of Apache 2.0.
 
 **Why two checkers:** the privacy checker follows our own rules (personal data, passwords, keys, internal addresses,
 customer data) – a general model with a prompt can be adjusted to them. Qwen3Guard is trained for harmful content and
@@ -126,7 +136,7 @@ among its languages; this phase is also the test for that.
 
 ## Implementation steps
 
-1. `vllm/` template for a GPU server (compose, four services, health checks) – start and measure the models there.
+1. `vllm/` template for one model per GPU server (compose, one service, model/port/GPUs/parallelism as settings, health check) – start and measure the models there.
 2. Plugin with unit tests (fake vLLM server): extraction, pattern check, parallel checks, decision table, rerouting,
    removing tools, notice (normal and streaming), cache.
 3. Bifrost image build in `setup.sh`, setup questions, `bifrost.json` provider `vllm`, firewall exception, embeddings switch.
