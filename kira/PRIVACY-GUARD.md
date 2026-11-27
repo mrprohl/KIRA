@@ -30,13 +30,13 @@ models themselves can only be tested on the servers – start in mode `observe`.
 
 | Role | Server | Model (proposal) | Served name |
 |---|---|---|---|
-| Privacy checker | 1× A100 80 GB, alone | `Qwen/Qwen3.5-35B-A3B` (BF16, about 70 GB – tight on 80 GB; fallback the FP8 variant) with KIRA's checking prompt | `kira-privacy` |
-| Safety checker | 1× A100 80 GB | `Qwen/Qwen3Guard-Gen-8B` | `kira-safety` |
-| Embeddings | own server, a small GPU is enough | `Qwen/Qwen3-Embedding-0.6B` (better search: `-8B`) | `kira-embedding` |
-| Answer model | 6× A100 80 GB | `Qwen/Qwen3.8-Flash-Next-FP8` (fallback `Qwen/Qwen3.8-27B`) | `kira-answer` |
+| Privacy checker | privacy, the GPU for itself | `Qwen/Qwen3.5-35B-A3B` (BF16, weights about 70 GB; fallback the FP8 variant, about 35 GB) with KIRA's checking prompt | `kira-privacy` |
+| Safety checker | safety | `Qwen/Qwen3Guard-Gen-8B` | `kira-safety` |
+| Embeddings | embedding, a small GPU is enough | `Qwen/Qwen3-Embedding-0.6B` (better search: `-8B`) | `kira-embedding` |
+| Answer model | answer | `Qwen/Qwen3.8-Flash-Next-FP8` (fallback `Qwen/Qwen3.8-27B`) | `kira-answer` |
 
 The model behind a name is set on the GPU server (`MODEL=` in the vLLM env file); KIRA only knows the names and the
-addresses. Details for each server, including the answer model on six GPUs: [vllm/README.md](../vllm/README.md).
+addresses. Details for each server, including memory needs and the answer model on several GPUs: [vllm/README.md](../vllm/README.md).
 
 **Why two checkers:** the privacy checker follows KIRA's own rules (personal data, passwords, keys, internal systems,
 confidential documents) – a general model with a prompt and a fixed JSON schema. Qwen3Guard is trained for harmful
