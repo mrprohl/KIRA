@@ -12,7 +12,8 @@
 # Networks:
 #   outbound   172.31.65.0/24  docs-sync → only the NAS (ip:445) – LAN block, no internet
 #   auth       172.31.66.0/24  docs-login → Keycloak:443 (like LibreChat)
-#   kira-docs     internal, 172.30.31.0/24  LibreChat → docs-search; docs-sync/-search → Onyx API
+#   kira-docs       internal, 172.30.31.0/24  LibreChat → docs-search (nothing else)
+#   kira-docs-onyx  internal, 172.30.33.0/24  docs-sync, docs-search → Onyx API
 #   kira-docsweb  internal, 172.30.32.0/24  Caddy → docs-login, docs-download
 #   kira-llm      internal                 docs-sync → Bifrost (image model, own virtual key)
 # ============================================================================
@@ -46,7 +47,7 @@ services:
       - /opt/kira/config/docs-agents.json:/config/docs-agents.json:ro
     networks:
       outbound: {}
-      kira-docs: {}
+      kira-docs-onyx: {}
       kira-llm: {}
 
   docs-search:
@@ -61,6 +62,7 @@ services:
       - /opt/kira/config/docs-agents.json:/config/docs-agents.json:ro
     networks:
       kira-docs: {}
+      kira-docs-onyx: {}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/health', timeout=5)"]
       interval: 30s
@@ -110,6 +112,8 @@ networks:
     ipam: { config: [{ subnet: 172.31.66.0/24 }] }   # source of the LAN block – do not change
   kira-docs:
     external: true            # 172.30.31.0/24, created by /opt/kira/setup.sh
+  kira-docs-onyx:
+    external: true            # 172.30.33.0/24, created by /opt/kira/setup.sh
   kira-docsweb:
     external: true            # 172.30.32.0/24, created by /opt/kira/setup.sh
   kira-llm:

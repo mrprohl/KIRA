@@ -22,7 +22,7 @@ models themselves can only be tested on the servers – start in mode `observe`.
 | Plugin `privacy-guard` | Go plugin in Bifrost (HTTP transport hooks): checks, decides, rewrites the request to the local model or answers it (refusal), adds the notice, logs one line per decision | `bifrost/plugins/privacy-guard/kiraguard/` (logic and tests in `guard/`) |
 | Bifrost image with plugin | the official image is linked statically and cannot load plugins; `setup.sh` builds the same Bifrost version dynamically together with the plugin (same Go, same base images as the official build) – image `kira/bifrost-guard:<tag>-<hash>`, set as `BIFROST_IMAGE` in `/opt/bifrost/env/versions.env` | `bifrost/plugins/privacy-guard/Dockerfile` |
 | vLLM (GPU servers) | one vLLM instance per model, served names `kira-privacy`, `kira-safety`, `kira-embedding`, `kira-answer` | template [`vllm/`](../vllm/README.md) – runs on the GPU servers |
-| Bifrost provider `vllm` | embedding and answer model; `allow_private_network` (they are in the LAN); `vk-librechat` may use them | `bifrost.json` (generated) |
+| Bifrost provider `vllm` | embedding and answer model; `allow_private_network` (they are in the LAN); `vk-librechat` (and `vk-docs` for the answer model) may use them | `bifrost.json` (generated) |
 | Firewall | Bifrost may reach exactly the four vLLM addresses (ip:port), nothing else in the LAN | `BIFROST_LAN_DST` in `config/egress.env` |
 | Slack report | weekly counts per decision and category, can be switched off | `scripts/privacy-report.sh` (cron Mondays 08:10) |
 

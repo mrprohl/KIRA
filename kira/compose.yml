@@ -12,6 +12,7 @@
 # Networks:
 #   kira-outbound 172.31.62.0/24  LibreChat -> Keycloak (OIDC); with KEYCLOAK_INTERNAL_IP only Keycloak:443 + DNS, no internet
 #   kira-proxy / kira-llm / kira-search / kira-onyx / kira-code / kira-docs   internal, created externally (setup.sh)
+#   (kira-docs: only LibreChat ↔ docs-search; the Onyx API is in kira-docs-onyx, without LibreChat)
 #   backend       internal        LibreChat <-> MongoDB, Meilisearch, RAG API; RAG API <-> pgvector
 # MongoDB, Meilisearch, pgvector and the RAG API have NO internet access.
 # ============================================================================
@@ -47,8 +48,9 @@ services:
       - "${KEYCLOAK_HOST:-keycloak.invalid}:${KEYCLOAK_IP:-127.0.0.1}"
     volumes:
       - /opt/kira/config/librechat.yaml:/app/librechat.yaml:ro
-      # template skills vorlagen-<agent> (stack docs; empty folder without documents) – DEPLOYMENT_SKILLS_DIR
-      - /opt/docs/skills/live:/app/kira-skills:ro
+      # template skills vorlagen-<agent> (stack docs; empty without documents) – DEPLOYMENT_SKILLS_DIR=…/live.
+      # The parent folder is mounted, so links inside it resolve within the container, not on the host
+      - /opt/docs/skills:/app/kira-skills:ro
       # branding (README, section "Branding"): own logo and app icons over the files of the image
       - /opt/kira/branding/favicon-16x16.png:/app/client/dist/assets/favicon-16x16.png:ro
       - /opt/kira/branding/favicon-32x32.png:/app/client/dist/assets/favicon-32x32.png:ro

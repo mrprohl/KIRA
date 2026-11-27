@@ -222,7 +222,10 @@ class Syncer:
             again = old and old["method"] and ("skipped-privacy" in old["method"] or "error" in old["method"]
                                                or ("none" in old["method"] and vision.enabled))
             retry = again and time.time() - (old["updated"] or 0) > RETRY_SKIPPED_H * 3600
-            if old and old["size"] == size and abs((old["mtime"] or 0) - mtime) < 1 and not retry:
+            # unchanged and still in the copy → nothing to do (a restored state.db without the copy fetches the files
+            # again; transcriptions come from the cache, no model calls)
+            if (old and old["size"] == size and abs((old["mtime"] or 0) - mtime) < 1 and not retry
+                    and os.path.isfile(safe_join(base, rel))):
                 continue
             if size > MAX_MB * 1024 * 1024:
                 log.warning("%s/%s: larger than %s MB – skipped", agent, rel, MAX_MB)

@@ -15,7 +15,8 @@ LIVE=/opt/docs/skills/live
 STAMP=/opt/kira/config/templates.sha256
 
 [ "$(id -u)" = 0 ] || { echo "Error: please run as root." >&2; exit 1; }
-[ -d "$LIVE" ] || { echo "Error: $LIVE is missing – run bash /opt/kira/setup.sh first." >&2; exit 1; }
+[ -d "$LIVE" ] && [ ! -L "$LIVE" ] && [ ! -L "${LIVE%/*}" ] \
+  || { echo "Error: $LIVE is missing or not a plain folder – run bash /opt/kira/setup.sh." >&2; exit 1; }
 
 current=$( { cd "$LIVE" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -c1-64)
 skills=$(find "$LIVE" -mindepth 2 -maxdepth 2 -name SKILL.md -printf '%h\n' | xargs -r -n1 basename | sort | tr '\n' ' ')

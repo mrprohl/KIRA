@@ -17,7 +17,7 @@
 #
 # Networks:
 #   onyx-outbound 172.31.64.0/24  internet (connectors, Hugging Face) – LAN/host blocked except Keycloak:443
-#   kira-proxy / kira-llm / kira-onyx / kira-docs   internal, created externally (setup.sh)
+#   kira-proxy / kira-llm / kira-onyx / kira-docs-onyx   internal, created externally (setup.sh)
 #   backend                         internal
 # Resources: expect at least 12–16 GB of RAM for Onyx alone (OpenSearch 2 GB heap + model servers).
 # ============================================================================
@@ -66,7 +66,7 @@ services:
       backend: {}
       outbound: {}
       kira-llm: {}               # LLM via Bifrost (configure in the Onyx admin area)
-      kira-docs: {}              # document sync and search per agent (optional stack docs)
+      kira-docs-onyx: {}         # document sync and search per agent (optional stack docs)
     volumes:
       - api_server_logs:/var/log/onyx
       - file-system:/app/file-system
@@ -293,8 +293,8 @@ networks:
     external: true
   kira-onyx:
     external: true
-  kira-docs:
-    external: true            # 172.30.31.0/24, created by /opt/kira/setup.sh
+  kira-docs-onyx:
+    external: true            # 172.30.33.0/24, created by /opt/kira/setup.sh
 
 volumes:
   db_volume:

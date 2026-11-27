@@ -43,6 +43,9 @@ bash /opt/kira/scripts/self-test.sh   # section "Code interpreter": containers, 
 
 In KIRA: "Erstelle eine Word-Datei mit einer Einladung zum Sommerfest" → the `.docx` appears in the chat.
 
+Letters and documents from the organisation's own templates (agents with `TEMPLATES=true`) also run here: the template
+skill `vorlagen-<agent>` brings the files into the sandbox (`/mnt/data/skills/…`) – [docs/README.md](../docs/README.md).
+
 ## What `compose.kira.yml` changes
 
 | Project default (developer mode) | For KIRA |

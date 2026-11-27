@@ -8,7 +8,7 @@ restarts it at night when they changed.
 LibreChat refuses to start on an invalid skill, so everything here is generated defensively:
   - file names only [a-zA-Z0-9._-] (umlauts transliterated, spaces → _), unique per skill
   - a new skill is built in /skills/tmp and swapped in with rename (never half-written in live/)
-  - body below LibreChat's limit (100,000 characters), description 20–1024 characters
+  - body below LibreChat's limit (100,000 UTF-16 units), description 20–1024 characters
 """
 import hashlib
 import os
@@ -20,7 +20,7 @@ import zipfile
 TEMPLATE_EXT = {".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg", ".svg"}
 MAX_FILE_BYTES = 10 * 1024 * 1024        # LibreChat skill file limit
 MAX_HINT_CHARS = 4000
-MAX_BODY_CHARS = 90000
+MAX_BODY_CHARS = 45000                   # LibreChat counts UTF-16 units (limit 100,000) – safe even for emoji
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss"})

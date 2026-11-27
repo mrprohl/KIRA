@@ -12,9 +12,9 @@ Which container is attached to which Docker network. Source of truth: the `compo
 - **Databases have no internet.** They sit only in the internal network of their own stack (`*_backend`); one
   stack cannot reach the database of another.
 - **Each shared network has one purpose:** `kira-llm` → Bifrost, `kira-search` → web search, `kira-onyx` → Onyx MCP,
-  `kira-code` → code interpreter API, `kira-docs` → document search and Onyx API, `kira-docsweb` → Caddy to the login
-  and download of the original files, `kira-proxy` → Caddy to the web front ends. LibreChat is in all of them except
-  `kira-docsweb`.
+  `kira-code` → code interpreter API, `kira-docs` → document search, `kira-docs-onyx` → document sync and search to
+  the Onyx API, `kira-docsweb` → Caddy to the login and download of the original files, `kira-proxy` → Caddy to the
+  web front ends. LibreChat is in all of them except `kira-docs-onyx` and `kira-docsweb`.
 - **Internet only where needed**, each stack through its own egress network (`172.31.60–66.0/24`). The LAN block
   (`kira-egress-firewall`) drops traffic from these networks to the LAN and to the host – and from all internal
   networks (`172.30.0.0/16`) to the host's own services.
@@ -64,15 +64,15 @@ Which container is attached to which Docker network. Source of truth: the `compo
 
 Documents (stack `docs`, only with `DOCS_ENABLED=true`):
 
-| Container | Egress | kira-docs | kira-docsweb | kira-llm | further |
-|---|:-:|:-:|:-:|:-:|---|
-| `docs-sync` | `docs-outbound`: only the NAS ip:445 | ✔ | | ✔ | |
-| `docs-search` | | ✔ | | | |
-| `docs-download` | | | ✔ | | |
-| `docs-login` | `docs-auth`: Keycloak (like LibreChat) | | ✔ | | |
+| Container | Egress | kira-docs | kira-docs-onyx | kira-docsweb | kira-llm |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `docs-sync` | `docs-outbound`: only the NAS ip:445 | | ✔ | | ✔ |
+| `docs-search` | | ✔ | ✔ | | |
+| `docs-download` | | | | ✔ | |
+| `docs-login` | `docs-auth`: Keycloak (like LibreChat) | | | ✔ | |
 | `librechat` | | ✔ | | | |
-| `onyx-api` | | ✔ | | | |
-| `caddy` | | | ✔ | | |
+| `onyx-api` | | | ✔ | | |
+| `caddy` | | | | ✔ | |
 
 The Onyx containers only run when Onyx is enabled in the setup; otherwise `kira-onyx` stays empty. The code
 interpreter only runs with `CODE_INTERPRETER=true`; it has no internet and no LAN at all (`codeinterpreter_backend`

@@ -108,7 +108,8 @@ With Keycloak in the LAN (`KEYCLOAK_INTERNAL_IP`) LibreChat gets no internet at 
 | `kira-search` | 172.30.22.0/24, internal | LibreChat, SearXNG, Firecrawl | web search |
 | `kira-onyx` | 172.30.23.0/24, internal | LibreChat, Onyx MCP | agent "Intranet" |
 | `kira-code` | 172.30.29.0/24, internal | LibreChat, code interpreter API (`codeapi`) | run code |
-| `kira-docs` | 172.30.31.0/24, internal | LibreChat, docs-search, docs-sync, Onyx API | document search per agent |
+| `kira-docs` | 172.30.31.0/24, internal | LibreChat, docs-search | document search per agent |
+| `kira-docs-onyx` | 172.30.33.0/24, internal | docs-sync, docs-search, Onyx API | documents into Onyx, search in Onyx |
 | `kira-docsweb` | 172.30.32.0/24, internal | Caddy, docs-login, docs-download | login and download of the original files |
 | `*_backend` | 172.30.24–27.0/24, internal | each stack's databases | databases only within their own stack |
 | `codeinterpreter_backend` | 172.30.30.0/24, internal | all code interpreter services | sandbox ↔ egress gateway, file server, Redis, MinIO – no internet |
@@ -382,6 +383,10 @@ could search the indexed intranet content. KIRA itself talks to Onyx internally 
    `Sites.Read.All`) and grant it read access only to the released sites via Microsoft Graph (e.g. documents,
    notes). In Onyx create the connector "SharePoint" with tenant ID, client ID, secret and the site URLs. Onyx then only
    sees what everyone may see – taking over SharePoint permissions is only available in the paid version.
+5. **With the documents per agent** (`DOCS_ENABLED`): additionally an API key with role **Admin** for the document sync
+   and optionally one with role Basic for the search (`setup.sh` asks). Each agent's folder becomes the document set
+   `kira-<agent>`; a SharePoint connector for an agent goes into the same set ([docs/README.md](../docs/README.md)).
+   Everyone with an Onyx account sees all document sets – keep Onyx accounts to admins.
 
 OpenSearch needs `vm.max_map_count=262144` on the host (`setup.sh` warns; in a container set it on its host).
 
@@ -431,7 +436,8 @@ LibreChat ── kira-code ──► codeapi (API) ─► worker ─► sandbox:
 | Costs per user/key | `/opt/kira/scripts/usage-report.sh current` (monthly to Slack automatically; Slack messages are in German) |
 | Monitoring | cron every 5 min: container health → Uptime Kuma push "KIRA Container", budget warnings → Slack |
 | Own agents (builder and model groups) | cron every 5 min `scripts/builder-sync.py` (only with `builder.…` in `agents/groups.env`); check `python3 /opt/kira/scripts/builder-sync.py --dry-run`, log `journalctl -t kira-builders` |
-| Backup | daily at 02:30 to `/var/backups/kira/<date>/` (Bifrost DB, MongoDB, RAG, Onyx DB, uploads, `/opt` stacks incl. secrets), 14 days; push "KIRA Backup" |
+| Backup | daily at 02:30 to `/var/backups/kira/<date>/` (Bifrost DB, MongoDB, RAG, Onyx DB, uploads, state of the document sync and download log, `/opt` stacks incl. secrets), 14 days; push "KIRA Backup" |
+| Documents per agent | `docker logs -f docs-sync`, `docker exec docs-sync python -m kiradocs.sync --check`; template skills take effect after the nightly LibreChat restart or `scripts/templates-reload.sh` – [docs/README.md](../docs/README.md) |
 | Versions | edit `/opt/<stack>/env/versions.env`, redeploy the stack. Back up first. Pinned versions instead of `latest` where possible. With the privacy guard, Bifrost: change `BIFROST_TAG`, then `setup.sh` (builds the image with the plugin) |
 | Caddy | site blocks `/opt/caddy/config/sites/*.caddy` freely editable, `docker exec caddy caddy reload --config /etc/caddy/Caddyfile` |
 | Code interpreter | `bash /opt/codeinterpreter/codeapi.sh ps` · `… logs --tail 50 sandbox-runner`; end-to-end test: `scripts/self-test.sh` (section "Code interpreter"); update: `CODEAPI_VERSION` and `CODEAPI_COMMIT` in `/opt/codeinterpreter/env/versions.env`, then `setup.sh` |
@@ -442,7 +448,9 @@ LibreChat ── kira-code ──► codeapi (API) ─► worker ─► sandbox:
 `rag.dump` the same way in `librechat-vectordb`, `onyx.dump` in `onyx-db`) or `mongorestore --archive --gzip --drop`
 (with the user from `env/mongodb.env`, `--authenticationDatabase admin`) with the files from the backup; uploads and
 images: `zcat librechat-uploads.tar.gz | docker cp - librechat:/app` and
-`zcat librechat-images.tar.gz | docker cp - librechat:/app/client/public`. Extract `opt-stacks.tgz` to `/opt` if
+`zcat librechat-images.tar.gz | docker cp - librechat:/app/client/public`. Documents: `zcat docs-state.tar.gz | docker cp -
+docs-sync:/data` and `zcat docs-logs.tar.gz | docker cp - docs-download:/` (container stopped), then start – docs-sync
+fetches the files from the NAS again, the transcriptions come from the restored state. Extract `opt-stacks.tgz` to `/opt` if
 needed (on a new server **before** the package – it holds the secrets). The Meilisearch and OpenSearch indexes are
 rebuilt.
 
@@ -485,7 +493,8 @@ KIRA app may have to be installed again.
 | agent does not answer / 401 | `BIFROST_API_KEY` (librechat.env) ≠ `VK_LIBRECHAT` (bifrost.env); `docker logs bifrost` |
 | 402 | a budget is used up – increase `max_limit` in `bifrost.json` or wait for the time window |
 | web search empty | `docker logs searxng`; search engine blocked (CAPTCHA) – enable others in `searxng/settings.yml` |
-| agent "Intranet" missing | Onyx off or `ONYX_API_KEY` missing → Onyx step 3; after an Onyx restart `docker restart librechat` |
+| agent "Intranet" missing | Onyx off or `ONYX_API_KEY` missing → Onyx step 3; after an Onyx restart `docker restart librechat`; with `DOCS_ENABLED=true` it needs `DOCS=true` |
+| documents: no hits, NAS errors, downloads end at the login | [docs/README.md](../docs/README.md), section "Operation and troubleshooting" |
 | MongoDB does not start ("Illegal instruction") | CPU without AVX (e.g. Proxmox CPU type kvm64) – CPU type `host` |
 | OpenSearch exits | `vm.max_map_count` too small (see Onyx) or too little RAM |
 | many users cannot get in | limits for shared IPs are already raised (`LOGIN_MAX`, no IP bans); `docker logs librechat` |
@@ -504,7 +513,8 @@ What the package does:
   links in LibreChat. Users cannot build agents (except builders, see "Own agents"), prompts, skills, MCP servers or
   presets; memories are off; code runs only in the KVM sandbox of the code interpreter (if switched on).
 - **Networks:** databases have no internet; internal networks between the stacks; only Caddy publishes ports. The
-  LAN block stops containers with internet from reaching the LAN and the host (exceptions: Keycloak :443 for LibreChat and Onyx only, DNS),
+  LAN block stops containers with internet from reaching the LAN and the host (exceptions: Keycloak :443 for LibreChat,
+  Onyx and the documents' login service only, the NAS :445 for the document sync only, DNS),
   and no container network – internal ones included – reaches services of the host.
   With Keycloak in the LAN, LibreChat has no internet at all (only Keycloak and DNS).
 - **Bifrost:** virtual key required for every request, no direct provider keys, admin login for the web interface,
@@ -524,6 +534,10 @@ What the package does:
 - Containers with `no-new-privileges`, `cap_drop: ALL` (except Onyx, the Firecrawl API and the code interpreter's MinIO
   and sandbox runner – their images need the default capabilities), memory limits (except Onyx), log rotation; no
   container gets the Docker socket.
+- **Documents per agent** (optional): each agent searches only its own folder (fixed in the configuration, checked
+  again by the search service against the user's role; own agents are refused); downloads only after Keycloak login
+  with the same group rules, forged login headers from the browser are removed; the sync reaches only the NAS on
+  port 445 – details in [docs/README.md](../docs/README.md) and [SECURITY.md](SECURITY.md).
 - **Code interpreter** (optional): one KVM microVM per run without network, login only with tokens signed by LibreChat,
   no ports, internal network only, sources pinned to the release commit – details in [SECURITY.md](SECURITY.md).
 - **Builder sync:** the Keycloak service account only reads users and groups (`view-users`, `query-groups`); its
@@ -533,7 +547,7 @@ Recommended outside the package (not checkable from here):
 
 - **Firewall** of the server (or the hypervisor): TCP 80/443 only from <PROXY-IP>, 22 and 9443 (Portainer = root on
   the host) only from the admin network.
-- **Backups** in `/var/backups/kira` contain the secrets from `env/` and all chats unencrypted (folder 700) – copy them
+- **Backups** in `/var/backups/kira` contain the secrets from `env/`, all chats and the transcribed document texts unencrypted (folder 700) – copy them
   only encrypted to another system.
 - **Pin image versions:** `SEARXNG_TAG`, `FIRECRAWL_PLAYWRIGHT_TAG` and `FIRECRAWL_NUQ_TAG` are `latest`;
   if needed pin them by digest (`image@sha256:…`) after a successful start.
@@ -543,7 +557,9 @@ Recommended outside the package (not checkable from here):
 - **Known residual risks** (accepted): builders reach the endpoint "Bifrost" of the fixed agents with hand-made API
   requests (see "Own agents"); Firecrawl's Redis has no password (internal network only, Redis refuses HTTP-style
   requests); MongoDB backup and `terms-reset.sh` pass the database password on the command line (root-only host);
-  no Content-Security-Policy for LibreChat (its artifacts load code from external sandboxes).
+  no Content-Security-Policy for LibreChat (its artifacts load code from external sandboxes); documents: whoever sees
+  an agent sees all files of its folder, texts in the documents can try to steer the agent (prompt injection) – only
+  trusted people write to the NAS folders.
 
 ## Notes
 

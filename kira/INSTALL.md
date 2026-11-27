@@ -138,7 +138,7 @@ Answers for this server:
 | Uptime Kuma push URLs | from step 1, internal IP of Uptime Kuma |
 | Start the stacks now? | `yes` |
 
-`setup.sh` pulls the images, starts bifrost → websearch → (codeinterpreter) → kira → (onyx) → caddy and runs the
+`setup.sh` pulls the images, starts bifrost → websearch → (codeinterpreter) → kira → (onyx) → (docs) → caddy and runs the
 self-test. On first start this takes a few minutes, with Onyx up to 20 minutes. With the privacy guard it first builds
 Bifrost with the plugin (another 5–15 minutes), with the code interpreter it builds that from source (30 minutes or
 more, only the first time and after a version change).
@@ -228,7 +228,7 @@ nano /opt/kira/agents/40-images.env                    # enter AGENT_ID=agent_�
 bash /opt/kira/setup.sh                                # asks for the Onyx API key, start with "yes"
 ```
 
-**Checkpoint:** the search in Onyx finds a document; in KIRA the agent **Intranet** appears and answers a question
+**Checkpoint** (with the documents per agent instead: step 8d)**:** the search in Onyx finds a document; in KIRA the agent **Intranet** appears and answers a question
 about one of your documents with a link to it.
 
 ---

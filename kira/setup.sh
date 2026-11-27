@@ -904,7 +904,7 @@ fi
 if is_true DOCS_ENABLED && [ -z "$(env_get "$LC_ENV" DOCS_SEARCH_KEY)" ]; then
   env_set "$LC_ENV" DOCS_SEARCH_KEY "$(random_hex 32)"
 fi
-env_set "$LC_ENV" DEPLOYMENT_SKILLS_DIR /app/kira-skills
+env_set "$LC_ENV" DEPLOYMENT_SKILLS_DIR /app/kira-skills/live
 
 ISSUER=$(env_get "$LC_ENV" OPENID_ISSUER)
 KC_HOST=$(printf '%s' "$ISSUER" | sed -E 's#^https://([^/:]+).*#\1#')
@@ -1107,9 +1107,15 @@ fi
 
 # ---------------------------------------------------------------- 6b. Documents (optional, stack docs)
 section "Documents (NAS folders per agent)"
-# the template skills folder is mounted into LibreChat in any case (empty without documents)
+# the template skills folder is mounted into LibreChat in any case (empty without documents). docs-sync owns it – a
+# symlink placed there must not make root change permissions elsewhere (chown/chmod follow links)
+for p in "$DOCS/skills" "$DOCS/skills/live"; do
+  if [ -L "$p" ] || { [ -e "$p" ] && [ ! -d "$p" ]; }; then
+    warn "$p is not a plain folder (link?) – removed and created again."; rm -f "$p"
+  fi
+done
 umask 022; mkdir -p "$DOCS/skills/live"; umask 077
-chown "$DOCS_UID:$DOCS_UID" "$DOCS/skills" "$DOCS/skills/live"
+chown -h "$DOCS_UID:$DOCS_UID" "$DOCS/skills" "$DOCS/skills/live"
 chmod 755 "$DOCS/skills" "$DOCS/skills/live"
 DOCS_IP=""
 if is_true DOCS_ENABLED; then
@@ -1203,7 +1209,8 @@ OAUTH2_PROXY_COOKIE_EXPIRE=8h
 OAUTH2_PROXY_COOKIE_REFRESH=1h
 OAUTH2_PROXY_REQUEST_LOGGING=false
 OAUTH2_PROXY_STANDARD_LOGGING=true
-OAUTH2_PROXY_AUTH_LOGGING=true
+# logins (e-mail) in "docker logs docs-login" only together with the download log
+OAUTH2_PROXY_AUTH_LOGGING=$(is_true DOCS_DOWNLOAD_LOG && echo true || echo false)
 EOF
   chmod 600 "$SYNC_ENV" "$LOGIN_ENV" "$DOCS/env/docs-search.env" "$DOCS/env/docs-download.env"
   unset NAS_PW ONYX_ADMIN ONYX_SEARCH ONYX_LC CLIENT_SECRET COOKIE_SECRET
@@ -1453,7 +1460,8 @@ create_net kira-llm    172.30.21.0/24
 create_net kira-search 172.30.22.0/24
 create_net kira-onyx   172.30.23.0/24
 create_net kira-code   172.30.29.0/24                     # LibreChat -> code interpreter API
-create_net kira-docs   172.30.31.0/24                     # LibreChat -> docs-search; docs-sync/-search -> Onyx API
+create_net kira-docs   172.30.31.0/24                     # LibreChat -> docs-search
+create_net kira-docs-onyx 172.30.33.0/24                  # docs-sync, docs-search -> Onyx API
 create_net kira-docsweb 172.30.32.0/24                    # Caddy -> docs-login, docs-download
 
 # ---------------------------------------------------------------- 9. LAN block (host firewall)

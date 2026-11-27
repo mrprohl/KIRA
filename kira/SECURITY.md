@@ -24,6 +24,8 @@ accepted and listed below.
 | Malicious web page (web search) | make the scraper call internal addresses (SSRF) | LAN block, internal-only networks, Firecrawl fix for redirects |
 | Compromised container | spread to the LAN, the host, other stacks | LAN block, one internal network per stack, `cap_drop`, `no-new-privileges`, no Docker socket |
 | Script on another web page | use a logged-in admin's session | CORS of Bifrost only for its own interface, `X-Frame-Options: DENY` |
+| Logged-in user (documents) | read documents of an agent they do not see | search fixed per agent and checked against the role; downloads only after login with the same group rule; login headers from the browser removed |
+| Author of a file in a NAS folder (or a crafted file) | steer the agent (prompt injection), exploit a file parser | write access to the folders only for trusted people; parsers run in `docs-sync` without internet and with only the NAS and Onyx reachable, read-only root, uid 10001, limits; rendered pages capped in size |
 
 ## Controls by area
 
@@ -143,8 +145,10 @@ Tested with real traffic (network namespaces, iptables as on the server):
 - Networks: `docs-sync` reaches only the NAS ip:445 (chain `KIRA-EGRESS-DOCS`, no internet, no DNS), `docs-login`
   only Keycloak (like LibreChat), `docs-search` and `docs-download` have no external access; `docs-download` reads the
   copy read-only. Containers `read_only`, `no-new-privileges`, `cap_drop: ALL`, memory and process limits, uid 10001.
-- The NAS account only reads; secrets in `/opt/docs/env/` (600). Download log (e-mail, file) only if switched on, with
-  daily deletion after the configured days.
+- The NAS account only reads; secrets in `/opt/docs/env/` (600). Download log (e-mail, file) and the login log of
+  `docs-login` only if switched on, with daily deletion after the configured days (Docker log rotation for the login log).
+- The Onyx key of `docs-sync` has the role Admin (the ingestion API needs it) – it stays in the container that parses
+  the files; `docs-search` uses its own key with role Basic.
 
 ### Secrets
 
@@ -189,6 +193,11 @@ Tested with real traffic (network namespaces, iptables as on the server):
    reachable by link without login.
 9. **Documents per agent (27.11.2026):** new stack `docs` with the separation above; the Onyx MCP server with access to
    the whole index is switched off while it is active.
+10. **Review of the documents stack (27.11.2026):** LibreChat no longer shares a network with the Onyx API (own network
+    `kira-docs-onyx` for docs-sync/docs-search ↔ Onyx); `setup.sh` no longer follows links in the template folder
+    (chown/chmod as root), LibreChat mounts its parent folder; PDF pages are rendered with a size cap; skill text kept
+    well below LibreChat's start limit; login log of the downloads only together with the download log; a restored sync
+    state fetches missing copies again.
 
 ## Accepted residual risks
 
@@ -207,14 +216,17 @@ Tested with real traffic (network namespaces, iptables as on the server):
 | Users can run any code in the sandbox (also via "Run code" on code blocks) | that is the feature; it runs isolated, with time, memory and parallel limits |
 | Documents: whoever sees an agent sees all files of its folder; NAS file permissions are not taken over | wanted (decision 27.11.2026); smaller circles get their own agent/folder |
 | Documents: with `CONFIDENTIAL=false` hits go to Claude/OpenAI and images to the image model; the Onyx search uses Onyx's LLM | data processing agreements; member data only after clarification with data protection; `CONFIDENTIAL=true` with the privacy guard for sensitive folders |
-| Documents: template skills are deployment skills, readable for every logged-in user via hand-made requests | only fixed agents list them; templates (letterheads) are not secret |
+| Documents: template skills are deployment skills; with the capability `skills` on, a builder could try to enable them for an own agent by a hand-made request | the skills area and API are off for users (`SKILLS` permission); only fixed agents list them; templates (letterheads) are not secret |
 | Documents: the login service refuses users whose e-mail is not verified | intended; Keycloak *Trust Email* for the Microsoft provider |
+| Documents: texts in the files can try to steer the agent (prompt injection), e.g. towards misleading links | only trusted people write to the NAS folders; agents without web search cannot send data out; answers are drafts |
+| Documents: a changed Keycloak group takes effect for downloads after at most one hour (session refresh) | short enough for the use case; immediately: the user logs out (`/dokumente/oauth2/sign_out`) |
+| Documents: PDFs open in the browser's PDF viewer on the KIRA domain (no CSP sandbox – it would break the viewer) | delivered as `application/pdf` with `nosniff`, never as HTML; the viewers run PDF scripts isolated |
 
 ## Outside the package (recommended, not checkable from here)
 
 - **Firewall** of the server (or the hypervisor): TCP 80/443 only from the upstream proxy (<PROXY-IP>); SSH and
   Portainer (9443 = root on the host) only from the admin network.
-- **Backups** in `/var/backups/kira` contain the secrets and all chats unencrypted (folder 700) – copy them only
+- **Backups** in `/var/backups/kira` contain the secrets, all chats and the transcribed document texts unencrypted (folder 700) – copy them only
   encrypted to another system.
 - **Keycloak:** `/admin` from the KIRA host only for the service account; the client `kira` confidential with PKCE.
 - **Updates:** check LibreChat, Bifrost, Onyx, Firecrawl and code interpreter releases for security fixes regularly and

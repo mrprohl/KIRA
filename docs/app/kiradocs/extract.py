@@ -90,10 +90,12 @@ def ocr_png(png_path):
     return text, (sum(confs) / len(confs) if confs else 0.0)
 
 
-def _page_png(pdf, page, dpi=200):
+def _page_png(pdf, page, max_px=2400):
+    """One PDF page as PNG, long side max_px (A4 ≈ 200 dpi) – also for oversized pages (no memory blow-up)."""
     with tempfile.TemporaryDirectory() as tmp:
         base = os.path.join(tmp, "p")
-        res = _run(["pdftoppm", "-r", str(dpi), "-f", str(page), "-l", str(page), "-png", "-singlefile", pdf, base])
+        res = _run(["pdftoppm", "-scale-to", str(max_px), "-f", str(page), "-l", str(page), "-png", "-singlefile",
+                    pdf, base])
         out = base + ".png"
         if res.returncode != 0 or not os.path.exists(out):
             return None

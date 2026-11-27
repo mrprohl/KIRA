@@ -14,8 +14,8 @@ Browser ── /dokumente/<agent>/<id> ──> Caddy ── login (docs-login, K
 
 | Service | Job | Networks |
 |---|---|---|
-| `docs-sync` | every 15 minutes: agent folders from the NAS → copy on this server + text → Onyx; `_vorlagen` → skill | `docs-outbound` (only the NAS on port 445), `kira-docs` (Onyx), `kira-llm` (image model via Bifrost) |
-| `docs-search` | MCP server for LibreChat: one tool `dokumente_suchen`, always in the document set of the calling agent | `kira-docs` |
+| `docs-sync` | every 15 minutes: agent folders from the NAS → copy on this server + text → Onyx; `_vorlagen` → skill | `docs-outbound` (only the NAS on port 445), `kira-docs-onyx` (Onyx API), `kira-llm` (image model via Bifrost) |
+| `docs-search` | MCP server for LibreChat: one tool `dokumente_suchen`, always in the document set of the calling agent | `kira-docs` (LibreChat), `kira-docs-onyx` (Onyx API) |
 | `docs-download` | hands out the original files from the copy, after login and rights check | `kira-docsweb` |
 | `docs-login` | Keycloak login for the downloads (oauth2-proxy, client `kira-docs`) | `kira-docsweb`, `docs-auth` (Keycloak) |
 
@@ -104,7 +104,9 @@ Onyx – including every other agent's folder. The agent "Intranet" searches its
   HTML, SVG …) is always downloaded (`Content-Disposition: attachment`, `nosniff`).
 - Download log (`DOCS_DOWNLOAD_LOG`, `DOCS_DOWNLOAD_LOG_DAYS`, default 90 days): time, user e-mail, agent, document,
   result (`geliefert`/`verweigert`/`unbekannt`), in the volume `docs_logs` (`downloads.jsonl`); older entries are deleted
-  daily. Off: the log is deleted.
+  daily. Off: the log is deleted, and the login service does not log logins either (`docker logs docs-login`).
+- A user removed from a group keeps download access for at most one hour (session refresh); at once: log out via
+  `https://<KIRA domain>/dokumente/oauth2/sign_out`.
 
 ### Keycloak client `kira-docs`
 
@@ -161,11 +163,15 @@ document sets), role **Basic** for the search (empty = LibreChat's `ONYX_API_KEY
   refuses own agents (agent builder – `X-Agent-Id` set) and checks the user's role against `config/docs-agents.json`.
 - `docs-sync` reaches only the NAS (ip:445) – no internet, no other LAN destination; `docs-login` only Keycloak;
   `docs-search` and `docs-download` have no external access at all. `docs-download` reads the copy read-only.
+  LibreChat reaches only `docs-search` (network `kira-docs`), not the Onyx API (`kira-docs-onyx`).
+- Everyone with an account in Onyx's web interface sees all document sets – keep Onyx accounts to admins.
 - All containers: `read_only`, `no-new-privileges`, `cap_drop: ALL`, memory limits; the Python services run as uid 10001.
 - **Residual risks:** with `CONFIDENTIAL=false` search hits go to the answering model (Claude/OpenAI) and images to the
   image model – covered by the data processing agreements; clarify member data with data protection first. The Onyx
   search itself uses the LLM configured in Onyx (Claude via `vk-onyx`) – with `CONFIDENTIAL=true` switch it to the local
-  model in the Onyx admin area. Templates are not secret: a hand-crafted request of a builder could reach them.
+  model in the Onyx admin area. Texts in the documents can try to steer the agent (prompt injection, e.g. misleading
+  links) – only trusted people write to the folders. Templates are not secret: a hand-crafted request of a builder
+  could reach them.
 
 ## Operation and troubleshooting
 
