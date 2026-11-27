@@ -48,13 +48,20 @@ async function sync(m, plan, log, db) {
     if (name.toUpperCase() === USER || name.toUpperCase() === 'ADMIN') {
       throw new Error(`group ${name}: reserved name`);
     }
+    // running code (code interpreter) only for groups that have an agent with CODE=true
+    const perms = JSON.parse(JSON.stringify(permissions));
+    const code = list.some((s) => s.executeCode);
+    if (!code) {
+      perms.RUN_CODE = { ...(perms.RUN_CODE || {}), USE: false };
+    }
+    const extra = `${builders.length ? ' + create agents' : ''}${code ? '' : ', no code execution'}`;
     const existing = await m.getRoleByName(name);
     if (existing) {
-      await m.updateRoleByName(name, { permissions, description: DESCRIPTION });
-      log(`role ${name}: permissions updated (same as USER${builders.length ? ' + create agents' : ''})`);
+      await m.updateRoleByName(name, { permissions: perms, description: DESCRIPTION });
+      log(`role ${name}: permissions updated (same as USER${extra})`);
     } else {
-      await m.createRoleByName({ name, description: DESCRIPTION, permissions });
-      log(`role ${name}: created (permissions same as USER${builders.length ? ' + create agents' : ''})`);
+      await m.createRoleByName({ name, description: DESCRIPTION, permissions: perms });
+      log(`role ${name}: created (permissions same as USER${extra})`);
     }
     await m.upsertConfig(ROLE, name, ROLE_MODEL, { modelSpecs: { list } });
     log(`role ${name}: ${list.length} agents (${list.map((s) => s.name).join(', ')})`);

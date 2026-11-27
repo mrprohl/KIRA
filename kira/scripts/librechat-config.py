@@ -657,6 +657,9 @@ def main():
             "peoplePicker": {"users": builder, "groups": builder, "roles": builder},
             "mcpServers": {"use": True, "create": False, "share": False, "public": False},
             "remoteAgents": {"use": False, "create": False, "share": False, "public": False},
+            # skills (instruction packages with files): LibreChat allows users to create them by default – off, like
+            # prompts and own agents; the agents have no "skills" capability anyway
+            "skills": {"use": False, "create": False, "share": False, "public": False},
             "webSearch": True,
             "fileSearch": True,
             "fileCitations": True,

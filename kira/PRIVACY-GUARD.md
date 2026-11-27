@@ -85,6 +85,7 @@ with a hit to the local model – without notice.
 | Embeddings (document search) | **always local** while the guard is on (`EMBEDDINGS_MODEL=vllm/kira-embedding` in `env/rag.env`). After switching, documents uploaded before cannot be searched – upload them again (`setup.sh` warns). |
 | Image generation and image edits | prompt is checked; on a privacy or safety hit, or if the check fails: **refused** (no local image model) |
 | Speech output (TTS) | text is checked; on a hit **refused** |
+| Code interpreter (`CODE_INTERPRETER`) | runs on the KIRA server, uploaded files stay in the house; what the code returns goes back to the model as a tool result and is checked like every other part – with a hit the chat is answered locally (the local answer model keeps the code tool) |
 | Speech input (STT) | audio cannot be checked before it is transcribed – goes to OpenAI as before; switch speech off (`SPEECH=false`) if that is not acceptable |
 
 ## Settings

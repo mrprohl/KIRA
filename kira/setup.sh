@@ -866,6 +866,20 @@ if is_true CODE_INTERPRETER; then
       && git -C "$CODEI/src" -c advice.detachedHead=false checkout -q -f "$CODE_VERSION") \
       || die "code interpreter $CODE_VERSION could not be fetched (GitHub reachable? tag correct?)."
   fi
+  # the sources are built and run as root – only the pinned commit (a tag can be moved)
+  # versions.env from an older package without the commit line: take it from the template if the version matches
+  if ! grep -q '^CODEAPI_COMMIT=' "$CODEI/env/versions.env" \
+     && [ "$(env_get "$CODEI/versions.env.example" CODEAPI_VERSION)" = "$CODE_VERSION" ]; then
+    env_set "$CODEI/env/versions.env" CODEAPI_COMMIT "$(env_get "$CODEI/versions.env.example" CODEAPI_COMMIT)"
+  fi
+  CODE_COMMIT=$(env_get "$CODEI/env/versions.env" CODEAPI_COMMIT)
+  head=$(git -C "$CODEI/src" rev-parse HEAD 2>/dev/null || true)
+  if [ -n "$CODE_COMMIT" ]; then
+    [ "$head" = "$CODE_COMMIT" ] || die "code interpreter sources are at commit ${head:-?}, expected CODEAPI_COMMIT=$CODE_COMMIT
+  ($CODEI/env/versions.env) – tag $CODE_VERSION moved or wrong commit. Check the release, then rm -rf $CODEI/src and run again."
+  else
+    warn "CODEAPI_COMMIT is empty in $CODEI/env/versions.env – the sources ($CODE_VERSION, commit $head) are not pinned."
+  fi
   # LibreChat signs a short token (Ed25519, 5 minutes) per request; the code interpreter knows only the public key
   if [ -z "$(env_get "$LC_ENV" CODEAPI_JWT_PRIVATE_KEY_BASE64)" ]; then
     env_set "$LC_ENV" CODEAPI_JWT_PRIVATE_KEY_BASE64 "$(openssl genpkey -algorithm ed25519 2>/dev/null | base64 -w0)"
@@ -901,9 +915,10 @@ if is_true CODE_INTERPRETER; then
   x=$(env_get "$LC_ENV" CODEAPI_JWT_PRIVATE_KEY_BASE64 | base64 -d | openssl pkey -pubout -outform DER 2>/dev/null \
       | tail -c 32 | base64 -w0 | tr '+/' '-_' | tr -d '=')
   [ ${#x} -eq 43 ] || die "public key of the code interpreter could not be derived (openssl with Ed25519 needed)."
-  sed -i '/^CODEAPI_JWT_JWKS_JSON=/d; /^CODE_PARALLEL=/d' "$CODE_ENV"
+  sed -i '/^CODEAPI_JWT_JWKS_JSON=/d; /^CODE_PARALLEL=/d; /^CODE_SANDBOX_MEM=/d' "$CODE_ENV"
   printf '%s\n' "CODEAPI_JWT_JWKS_JSON='{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"$x\",\"kid\":\"kira-1\",\"alg\":\"EdDSA\",\"use\":\"sig\"}]}'" >> "$CODE_ENV"
   n=$(setup_get CODE_PARALLEL); echo "CODE_PARALLEL=${n:-4}" >> "$CODE_ENV"
+  echo "CODE_SANDBOX_MEM=$(( 2 * ${n:-4} + 1 ))g" >> "$CODE_ENV"   # memory limit of the sandbox container (all VMs)
   # RAM: KIRA about 8 GB (+16 GB with Onyx), the code interpreter 2 GB for its services + 2 GB per parallel run
   need=$(( 8 + 2 + 2 * ${n:-4} )); is_true ONYX_ENABLED && need=$((need + 16))
   mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
@@ -1006,7 +1021,7 @@ EOF
     || warn "The host has $((mem_kb / 1024 / 1024)) GB of RAM. 24 GB or more is recommended for Onyx plus everything else."
   mmc=$(cat /proc/sys/vm/max_map_count 2>/dev/null || echo 0)
   [ "$mmc" -ge 262144 ] \
-    || warn "vm.max_map_count is $mmc – OpenSearch needs 262144. Set it on the host (for LXC: on the Proxmox host):
+    || warn "vm.max_map_count is $mmc – OpenSearch needs 262144. Set it on the host (in a container: on its host):
   echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-opensearch.conf && sysctl --system"
 else
   info "Onyx is off (ONYX_ENABLED=false) – stack onyx is not set up."
@@ -1447,6 +1462,10 @@ if [ "$START" = true ]; then
         || die "images of the code interpreter could not be pulled (REDIS_IMAGE/MINIO_IMAGE in $CODEI/env/versions.env)."
       info "--- codeinterpreter: starting"
       bash "$CA" up -d --no-build --remove-orphans || die "starting the code interpreter failed – bash $CA logs"
+      # delete files in its storage after 2 days (it only uses them for 24 h; the results are stored in LibreChat)
+      for _ in $(seq 30); do running codeapi-files && break; sleep 2; done
+      docker exec -e KIRA_EXPIRE_DAYS=2 codeapi-files bun -e "$(cat "$CODEI/lifecycle.js")" \
+        || warn "code interpreter: expiry of its files not set – run setup.sh again (codeinterpreter/README.md)."
       continue
     fi
     f=/opt/$s/docker-compose.yml

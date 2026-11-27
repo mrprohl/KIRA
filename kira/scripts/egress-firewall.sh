@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================================
 # egress-firewall.sh – LAN block: containers in the networks with internet access must not reach private/internal
-# addresses (LAN, Proxmox, NAS, link-local …) nor services of the host itself (SSH, Portainer …).
+# addresses (LAN, hypervisor, NAS, link-local …); no container network may reach services of the host itself
+# (SSH, Portainer …) – including the internal networks, e.g. the code interpreter sandbox.
 # Replies to incoming connections stay allowed. Protects e.g. against a crafted web page that tries to make
 # Firecrawl fetch internal systems (SSRF).
 #
@@ -23,6 +24,9 @@ CHAIN_IN=KIRA-EGRESS-IN
 CHAIN_LC=KIRA-EGRESS-LIBRECHAT
 # kira-edge (Caddy), bifrost-outbound, kira-outbound, websearch-outbound, onyx-outbound – see the stacks' compose.yml
 SOURCES=(172.31.60.0/24 172.31.61.0/24 172.31.62.0/24 172.31.63.0/24 172.31.64.0/24)
+# internal networks of all stacks (172.30.20–30.0/24 – kira-proxy, kira-llm …, *_backend, codeinterpreter_backend):
+# Docker keeps them away from LAN and internet, but not from the host's own services – blocked below (INPUT)
+INTERNAL=172.30.0.0/16
 LC_SOURCE=172.31.62.0/24
 BIFROST_SOURCE=172.31.61.0/24
 # networks that may reach Keycloak in the LAN: LibreChat (login) and Onyx (optional SSO in its admin area)
@@ -97,10 +101,10 @@ apply() {
   iptables -N "$CHAIN_IN" 2>/dev/null || iptables -F "$CHAIN_IN"
   iptables -A "$CHAIN_IN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
   iptables -A "$CHAIN_IN" -j DROP
-  for src in "${SOURCES[@]}"; do
+  for src in "${SOURCES[@]}" "$INTERNAL"; do
     iptables -C INPUT -s "$src" -j "$CHAIN_IN" 2>/dev/null || iptables -I INPUT -s "$src" -j "$CHAIN_IN"
   done
-  echo "LAN block active: ${SOURCES[*]} -> no private destinations${ALLOW_PRIVATE_DST:+ (exception: $ALLOW_PRIVATE_DST:443 for LibreChat and Onyx)}."
+  echo "LAN block active: ${SOURCES[*]} -> no private destinations; ${SOURCES[*]} $INTERNAL -> no host services${ALLOW_PRIVATE_DST:+ (exception: $ALLOW_PRIVATE_DST:443 for LibreChat and Onyx)}."
   [ -z "$LIBRECHAT_ONLY_DST" ] || echo "LibreChat ($LC_SOURCE): no internet – only $LIBRECHAT_ONLY_DST:443 and DNS."
   [ -z "$BIFROST_LAN_DST" ] || echo "Bifrost ($BIFROST_SOURCE): additionally the vLLM servers $BIFROST_LAN_DST (privacy guard)."
 }
@@ -111,6 +115,7 @@ remove() {
     while iptables -D DOCKER-USER -s "$src" ! -d "$src" -j "$CHAIN_LC" 2>/dev/null; do :; done
     while iptables -D INPUT -s "$src" -j "$CHAIN_IN" 2>/dev/null; do :; done
   done
+  while iptables -D INPUT -s "$INTERNAL" -j "$CHAIN_IN" 2>/dev/null; do :; done
   for c in "$CHAIN" "$CHAIN_IN" "$CHAIN_LC"; do
     iptables -F "$c" 2>/dev/null || true
     iptables -X "$c" 2>/dev/null || true
@@ -125,6 +130,7 @@ status() {
     iptables -C DOCKER-USER -s "$src" ! -d "$src" -j "$c" 2>/dev/null || { echo "missing: DOCKER-USER -s $src -j $c"; ok=1; }
     iptables -C INPUT -s "$src" -j "$CHAIN_IN" 2>/dev/null || { echo "missing: INPUT -s $src -j $CHAIN_IN"; ok=1; }
   done
+  iptables -C INPUT -s "$INTERNAL" -j "$CHAIN_IN" 2>/dev/null || { echo "missing: INPUT -s $INTERNAL -j $CHAIN_IN"; ok=1; }
   [ "${1:-}" = "-q" ] || { iptables -nvL "$CHAIN" 2>/dev/null; [ -z "$LIBRECHAT_ONLY_DST" ] || iptables -nvL "$CHAIN_LC" 2>/dev/null; } || true
   return $ok
 }

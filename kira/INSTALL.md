@@ -86,9 +86,7 @@ ls /opt                                                 # caddy bifrost kira web
 (`/var/backups/kira/<date>/`) over. On the new server extract `opt-stacks.tgz` to `/opt` **before** the package
 (`tar xzf opt-stacks.tgz -C /opt` – keeps all secrets and answers), then the package over it as above. `setup.sh` then
 only asks the new questions; afterwards restore the databases and uploads (README, section "Operations" → Restore).
-The certificates are requested again.
-
-The certificates live in the volume `caddy_data` and survive a reinstall.
+The certificates are requested again (on the same server they live in the volume `caddy_data` and survive a reinstall).
 
 **Checkpoint:** `ls -l /opt/kira/setup.sh` shows `-rwxr-xr-x`.
 

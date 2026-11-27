@@ -35,9 +35,9 @@ one GPU: the FP8 variant of the privacy checker and `GPU_MEM` of both together b
   `setup.sh` generates one if you leave it empty: `grep ^VLLM_API_KEY /opt/bifrost/env/bifrost.env`.
 - **Firewall of the GPU servers:** allow the port only from the KIRA server (e.g. `ufw allow from <KIRA-IP> to any port 8101 proto tcp`).
   vLLM speaks plain HTTP; in an untrusted LAN put a reverse proxy with TLS in front and use `https://…` in `setup.sh`.
-- **Answer model:** `Qwen3.8-Flash-Next` is new (architecture `qwen4_exp`) – it needs a current vLLM. Start with FP8 on
-  4 GPUs as in the template; if it does not load (GPUs without native FP8 run it weight-only), try BF16 with expert parallelism or use
-  `Qwen/Qwen3.8-27B` as fallback. Read the licence (Qwen Community License) before use.
+- **Answer model:** `Qwen3.8-Flash-Next` is new (architecture `qwen4_exp`) – it needs a current vLLM. Start with FP8 and
+  tensor parallelism as in the template (`GPU_DEVICES`/`TP_SIZE` to match your server); if it does not load (GPUs
+  without native FP8 run it weight-only), try BF16 with expert parallelism or use `Qwen/Qwen3.8-27B` as fallback. Read the licence (Qwen Community License) before use.
 - **Tool calls:** agents use tools (document search, intranet). The answer model needs `--enable-auto-tool-choice` and
   the tool-call parser from its model card.
 - **Embeddings:** `--runner pooling` (newer vLLM) or `--task embed` (older) – `vllm serve --help`.

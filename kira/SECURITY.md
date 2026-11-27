@@ -10,7 +10,7 @@ section "Own agents".
 
 ## Result
 
-No critical finding. Three hardenings were applied during the review (see "Changes"); some small residual risks are
+No critical finding. Hardenings applied during the reviews are listed under "Changes"; some small residual risks are
 accepted and listed below.
 
 ## Threat model
@@ -19,7 +19,8 @@ accepted and listed below.
 |---|---|---|
 | Anyone on the internet | reach a service, log in | only Caddy publishes ports; login only via Keycloak; admin interfaces only from allowed IPs |
 | Logged-in user | use more than allowed (agents, models, money) | role per Keycloak group, agent list enforced by LibreChat, budgets in Bifrost, message limit |
-| Builder | expensive models, share agents, reach internals | model groups, no sharing permission, no actions/code/own MCP servers |
+| Builder | expensive models, share agents, reach internals | model groups, no sharing permission, no actions or own MCP servers; code only in the sandbox and only if their group may run code |
+| Code written by the model (also steered by a prompt injection in a document or web page) | read secrets, reach the LAN or the host, keep running | one KVM microVM per run without network, egress gateway, internal networks, no host services from container networks, limits |
 | Malicious web page (web search) | make the scraper call internal addresses (SSRF) | LAN block, internal-only networks, Firecrawl fix for redirects |
 | Compromised container | spread to the LAN, the host, other stacks | LAN block, one internal network per stack, `cap_drop`, `no-new-privileges`, no Docker socket |
 | Script on another web page | use a logged-in admin's session | CORS of Bifrost only for its own interface, `X-Frame-Options: DENY` |
@@ -47,8 +48,8 @@ accepted and listed below.
   hand-made requests.
 - Own agents only for members of `BUILDER_GROUP` **and** a model group; the models are narrowed per user and checked
   by LibreChat on every message. Builders cannot share agents. Admins get all models and parameters.
-- Off for users: prompt library, memories, presets, marketplace, "+" (multiConvo, admins only), code execution,
-  OpenAPI actions, own MCP servers.
+- Off for users: prompt library, skills, memories, presets, marketplace, "+" (multiConvo, admins only), OpenAPI
+  actions, own MCP servers; code execution only with the code interpreter, for agents with `CODE=true`.
 - Links with `?prompt=…&submit=true` only fill in the prompt; `/api/config` shows no build information.
 
 ### LLM gateway (Bifrost)
@@ -73,9 +74,12 @@ accepted and listed below.
 ### Networks and egress
 
 - Databases and caches have no internet and sit only in the internal network of their own stack.
-- Shared internal networks with one purpose each (`kira-llm`, `kira-search`, `kira-onyx`, `kira-proxy`).
+- Shared internal networks with one purpose each (`kira-llm`, `kira-search`, `kira-onyx`, `kira-code`, `kira-proxy`).
 - LAN block (`kira-egress-firewall`): containers with internet cannot reach the LAN or the host. Exceptions:
   DNS servers of the host (port 53), Keycloak on port 443 – **only for LibreChat and Onyx**.
+- No container network reaches services of the host (SSH, Portainer …): the LAN block drops new connections to the
+  host from the egress networks **and** from all internal networks (`172.30.0.0/16` – Docker keeps internal networks
+  away from LAN and internet, but not from the host's own addresses).
 - With Keycloak in the LAN, LibreChat has **no internet at all** (only Keycloak and DNS).
 
 Tested with real traffic (network namespaces, iptables as on the server):
@@ -97,11 +101,32 @@ Tested with real traffic (network namespaces, iptables as on the server):
 
 ### Agents and tools
 
-- Capabilities: file search, web search, artifacts, context, the image tool. No OpenAPI actions, no code
-  execution, no own MCP servers – an agent cannot call arbitrary addresses from inside the stack.
+- Capabilities: file search, web search, artifacts, context, the image tool, code execution (only with
+  `CODE_INTERPRETER=true`, see below). No OpenAPI actions, no own MCP servers – an agent cannot call arbitrary
+  addresses from inside the stack.
 - Tool library only with "OpenAI Image Tools" (Google, Wolfram, Tavily, … are not loaded).
 - "Übergaben" (handoffs) cannot be switched off in LibreChat v0.8.9; uncritical, because handovers only go to agents
   the user can see anyway.
+
+### Code interpreter (optional)
+
+- Every run gets its own KVM microVM (own guest kernel, NsJail and seccomp inside, per-run user, 2 GB, 2 vCPUs,
+  300 s). The VM has no network; the launcher only forwards to the egress gateway, which only passes files and tool
+  calls (signed execution manifests). `KVM_ENABLED=false` is never used.
+- The stack publishes no ports and sits in the internal network `codeinterpreter_backend` (no internet, no LAN, no
+  host services). LibreChat reaches only the API `codeapi:3112` over `kira-code`.
+- Login: LibreChat signs a token per request (Ed25519, 5 minutes, issuer/audience checked); the code interpreter
+  only knows the public key. Without a valid token no run (`LOCAL_MODE=false`). Remote bridge (external sandboxes)
+  off. Files and outputs are separated per user (the user ID in the token).
+- Who may run code: only agents with `CODE=true`; with agents per group only groups that have such an agent
+  (LibreChat permission `RUN_CODE`).
+- Sources: the pinned release is checked against its commit (`CODEAPI_COMMIT`) before it is built – a moved tag is
+  refused. Own secrets instead of the project's examples (`env/codeapi.env`, 600).
+- Services with `no-new-privileges`, `cap_drop: ALL` (Redis: only the capabilities to switch users), memory limits;
+  the sandbox runner keeps the project's settings (it starts the VMs and the per-run users) with a memory limit for
+  all VMs together.
+- Files in its storage (MinIO) are deleted after 2 days (lifecycle rule set by `setup.sh`); results are stored in
+  LibreChat and deleted with the chat (`CHAT_RETENTION`).
 
 ### Secrets
 
@@ -113,8 +138,9 @@ Tested with real traffic (network namespaces, iptables as on the server):
 
 ### Containers
 
-- `no-new-privileges` everywhere; `cap_drop: ALL` except Onyx and the Firecrawl API (their images need the default
-  capabilities); memory and process limits except Onyx; log rotation; no container gets the Docker socket.
+- `no-new-privileges` everywhere except the code interpreter's sandbox runner; `cap_drop: ALL` except Onyx, the
+  Firecrawl API, MinIO and the sandbox runner (their images need the default capabilities); memory limits except
+  Onyx; log rotation; no container gets the Docker socket; only the sandbox runner gets a device (`/dev/kvm`).
 
 ### Keycloak service account (builder sync)
 
@@ -137,6 +163,12 @@ Tested with real traffic (network namespaces, iptables as on the server):
 4. **Web search:** RabbitMQ without the management interface (`RABBITMQ_TAG=3-alpine`), process limits for all
    web search containers.
 5. **Builder sync:** state file 600.
+6. **Code interpreter (27.11.2026):** runs locally instead of on an own server – no published ports, internal network
+   only, remote bridge off, sources pinned to the release commit, hardening of its services, file expiry in its storage,
+   code permission only for groups with a code agent.
+7. **Host services:** the LAN block now also drops new connections from the internal networks to the host.
+8. **Office download links removed:** documents come from the code interpreter and stay in LibreChat – no files
+   reachable by link without login.
 
 ## Accepted residual risks
 
@@ -149,6 +181,10 @@ Tested with real traffic (network namespaces, iptables as on the server):
 | All KIRA users share one virtual key | one user can use up the budget for everyone; `MESSAGE_LIMIT` slows this down |
 | Builders can add the MCP server "intranet" (Onyx) to their own agents | only make people builders who may see the intranet |
 | `SEARXNG_TAG`, `FIRECRAWL_PLAYWRIGHT_TAG`, `FIRECRAWL_NUQ_TAG` are `latest` | upstream offers no version tags for some of them; pin by digest if needed |
+| Code interpreter: a sandbox escape (KVM or guest kernel bug) lands on the KIRA server | defence in depth (microVM + NsJail + seccomp, no network, internal network only); keep the host and `CODEAPI_VERSION` up to date |
+| Code interpreter: MinIO image `quay.io/minio/minio` without version and no longer maintained as a community image | internal network only, own credentials; pin `MINIO_IMAGE` by digest after the first start |
+| Code interpreter: the Redis password is on the command line of `codeapi-redis` (project default) | visible only on the host (`docker inspect`); Redis is reachable only in its internal network |
+| Users can run any code in the sandbox (also via "Run code" on code blocks) | that is the feature; it runs isolated, with time, memory and parallel limits |
 
 ## Outside the package (recommended, not checkable from here)
 
@@ -157,8 +193,8 @@ Tested with real traffic (network namespaces, iptables as on the server):
 - **Backups** in `/var/backups/kira` contain the secrets and all chats unencrypted (folder 700) – copy them only
   encrypted to another system.
 - **Keycloak:** `/admin` from the KIRA host only for the service account; the client `kira` confidential with PKCE.
-- **Updates:** check LibreChat, Bifrost, Onyx and Firecrawl releases for security fixes regularly and raise the tags in
-  `env/versions.env`.
+- **Updates:** check LibreChat, Bifrost, Onyx, Firecrawl and code interpreter releases for security fixes regularly and
+  raise the tags in `env/versions.env`; keep the host kernel patched (KVM).
 
 ## Checking it on the server
 
@@ -167,6 +203,7 @@ bash /opt/kira/scripts/self-test.sh                       # incl. LAN block and 
 bash /opt/kira/scripts/egress-firewall.sh status          # firewall rules
 python3 -c 'import json; print(json.load(open("/opt/bifrost/config/bifrost.json"))["client"]["allowed_origins"])'
 bash /opt/kira/scripts/user-check.sh <e-mail>             # role and agent list of a user
+bash /opt/codeinterpreter/codeapi.sh ps                   # code interpreter: no ports listed under PORTS
 ss -tlnp | grep -E ':(80|443|8080) '                      # only Caddy (docker-proxy) listens
 ```
 

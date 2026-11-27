@@ -170,14 +170,16 @@ The agents live in `/opt/kira/agents/` – per agent one `.env` (settings) and o
 Field description in `agents/README.md`. Users only see these agents, no raw models, no parameters.
 Titles, descriptions and instructions are German, as the users see them.
 
-| Agent (`NAME`) | Title (as shipped) | Model | Web search | Files | Intranet | Images |
-|---|---|---|---|---|---|---|
-| `kira` (default) | KIRA | Claude Sonnet 5.5 | yes | yes | – | – |
-| `code` | Code | Claude Opus 5.5 | yes | yes | – | – |
-| `intranet` | Intranet | GPT-6.1 Terra | – | – | yes (Onyx) | – |
-| `images` | as `TITLE` in `40-images.env` | Claude Haiku 5.5 (prompt), image: `IMAGE_MODEL` | – | yes | – | yes |
-| `writing` | Textwerkstatt | Claude Sonnet 5.5 | – | yes | – | – |
-| `minutes` | Protokoll | Claude Sonnet 5.5 | – | yes | – | – |
+| Agent (`NAME`) | Title (as shipped) | Model | Web search | Files | Intranet | Images | Code |
+|---|---|---|---|---|---|---|---|
+| `kira` (default) | KIRA | Claude Sonnet 5.5 | yes | yes | – | – | yes¹ |
+| `code` | Code | Claude Opus 5.5 | yes | yes | – | – | yes¹ |
+| `intranet` | Intranet | GPT-6.1 Terra | – | – | yes (Onyx) | – | – |
+| `images` | as `TITLE` in `40-images.env` | Claude Haiku 5.5 (prompt), image: `IMAGE_MODEL` | – | yes | – | yes | – |
+| `writing` | Textwerkstatt | Claude Sonnet 5.5 | – | yes | – | – | yes¹ |
+| `minutes` | Protokoll | Claude Sonnet 5.5 | – | yes | – | – | yes¹ |
+
+¹ only with `CODE_INTERPRETER=true` – runs Python and writes documents (section "Code interpreter").
 
 Titles of chats and summaries of long chats: Claude Haiku 5.5. Opus ignores `TEMPERATURE` (Bifrost drops it).
 
@@ -214,7 +216,8 @@ rights at their next login. Users who are logged in and lose their group see no 
 (role `USER` without endpoint). New accounts land in `kira-users-default` automatically via Keycloak's default group.
 
 How it works: `setup.sh` calls `scripts/agent-groups.sh`. It creates one LibreChat role per group with the same name
-(permissions like normal users) and its own agent list, and switches on the role sync: LibreChat reads the `groups`
+(permissions like normal users; code execution only if one of its agents has `CODE=true`) and its own agent list,
+and switches on the role sync: LibreChat reads the `groups`
 claim from the ID token at login. **Exactly one group applies per user** – with several, the one with the most agents
 (tie: order in the file). The mapping applies from the next login; users who are already logged in have to log out
 and in once (until then they see no agent).
@@ -289,6 +292,8 @@ How it works:
 - The agent group roles get the permission "create agents"; for everyone else the builder stays
   hidden (`disableBuilder`) and their stored agents could not run anyway (`allowedProviders`, model specs enforced).
 - Own agents are private: sharing stays off.
+- With the code interpreter, builders can switch on code execution for their own agents – only if their group
+  has an agent with `CODE=true` (otherwise the group role has no code permission).
 - Tool library: only "OpenAI Image Tools" (with image generation on), no Google, Wolfram, Tavily, Flux …
   (`includedTools`). Everyone who can build agents may add the image tool to their own agents (images go over the
   same Bifrost key and budget).
@@ -356,7 +361,7 @@ could search the indexed intranet content. KIRA itself talks to Onyx internally 
    notes). In Onyx create the connector "SharePoint" with tenant ID, client ID, secret and the site URLs. Onyx then only
    sees what everyone may see – taking over SharePoint permissions is only available in the paid version.
 
-OpenSearch needs `vm.max_map_count=262144` on the host (for LXC set it on the Proxmox host; `setup.sh` warns).
+OpenSearch needs `vm.max_map_count=262144` on the host (`setup.sh` warns; in a container set it on its host).
 
 ## Code interpreter
 
@@ -377,6 +382,8 @@ LibreChat ── kira-code ──► codeapi (API) ─► worker ─► sandbox:
 - Login: LibreChat signs a token per request with its private key (`env/librechat.env`); the code interpreter only
   knows the public key. No published ports, no internet, no LAN – the sandbox only reaches the egress gateway.
 - Own templates (letterhead): upload the `.docx`/`.pptx` in the chat and ask KIRA to use it.
+- Its own storage keeps files only 2 days (lifecycle rule, set by `setup.sh`); who may run code: agents with
+  `CODE=true`, with agents per group only groups that have such an agent.
 - Operation: `bash /opt/codeinterpreter/codeapi.sh ps | logs --tail 50 <service> | restart` – details in
   [codeinterpreter/README.md](../codeinterpreter/README.md).
 
@@ -394,7 +401,7 @@ LibreChat ── kira-code ──► codeapi (API) ─► worker ─► sandbox:
 | Backup | daily at 02:30 to `/var/backups/kira/<date>/` (Bifrost DB, MongoDB, RAG, Onyx DB, uploads, `/opt` stacks incl. secrets), 14 days; push "KIRA Backup" |
 | Versions | edit `/opt/<stack>/env/versions.env`, redeploy the stack. Back up first. Pinned versions instead of `latest` where possible. With the privacy guard, Bifrost: change `BIFROST_TAG`, then `setup.sh` (builds the image with the plugin) |
 | Caddy | site blocks `/opt/caddy/config/sites/*.caddy` freely editable, `docker exec caddy caddy reload --config /etc/caddy/Caddyfile` |
-| Code interpreter | `bash /opt/codeinterpreter/codeapi.sh ps` · `… logs --tail 50 sandbox-runner`; end-to-end test: `scripts/self-test.sh` (section "Code interpreter"); update: `CODEAPI_VERSION` in `/opt/codeinterpreter/env/versions.env`, then `setup.sh` |
+| Code interpreter | `bash /opt/codeinterpreter/codeapi.sh ps` · `… logs --tail 50 sandbox-runner`; end-to-end test: `scripts/self-test.sh` (section "Code interpreter"); update: `CODEAPI_VERSION` and `CODEAPI_COMMIT` in `/opt/codeinterpreter/env/versions.env`, then `setup.sh` |
 | Privacy guard | decisions `docker logs bifrost 2>&1 \| grep 'privacy-guard mode='`, counts `scripts/privacy-report.sh` – [PRIVACY-GUARD.md](PRIVACY-GUARD.md) |
 | Logo and favicon | replace the files in `/opt/kira/branding/`, `bash /opt/kira/setup.sh` (restarts LibreChat) – section "Branding" |
 
@@ -434,6 +441,7 @@ KIRA app may have to be installed again.
 | `env file … not found` in Portainer | `setup.sh` has not run, or Portainer has no volume `/opt:/opt:ro` |
 | images cannot be pulled | check tag/registry in `env/versions.env` (LibreChat: fall back to `ghcr.io/librechat-ai/…`) |
 | `setup.sh`: "CODE_INTERPRETER=true needs /dev/kvm" | no hardware virtualisation: in a VM enable nested virtualisation and CPU type `host`; in an LXC container it does not work – `CODE_INTERPRETER=false` |
+| `setup.sh`: "code interpreter sources are at commit …, expected CODEAPI_COMMIT=…" | the tag points to another commit than pinned – check the release; after a deliberate update set `CODEAPI_COMMIT` to its commit, `rm -rf /opt/codeinterpreter/src`, run again |
 | code interpreter: build fails | `bash /opt/codeinterpreter/codeapi.sh build` shows the step; needs internet (GitHub, Docker Hub, package mirrors) and about 30 GB disk |
 | code interpreter: 401 in the self-test | key pair changed – run `setup.sh` again (it writes the public key to `codeinterpreter/env/codeapi.env`), then `bash /opt/codeinterpreter/codeapi.sh up -d` |
 | code interpreter: runs hang or fail with 5xx | `codeapi.sh logs --tail 80 service-worker sandbox-runner`; `codeapi-sandbox` unhealthy = `/dev/kvm` missing in the container or clock skew of the host (NTP) |
@@ -460,10 +468,11 @@ Full review with threat model, test results and residual risks: [SECURITY.md](SE
 What the package does:
 
 - **Login only via Keycloak** (PKCE, required role/group); no local accounts, registration, password reset or shared
-  links in LibreChat. Users cannot build agents (except builders, see "Own agents"), prompts, MCP servers or
+  links in LibreChat. Users cannot build agents (except builders, see "Own agents"), prompts, skills, MCP servers or
   presets; memories are off; code runs only in the KVM sandbox of the code interpreter (if switched on).
 - **Networks:** databases have no internet; internal networks between the stacks; only Caddy publishes ports. The
-  LAN block stops containers with internet from reaching the LAN and the host (exceptions: Keycloak :443 for LibreChat and Onyx only, DNS).
+  LAN block stops containers with internet from reaching the LAN and the host (exceptions: Keycloak :443 for LibreChat and Onyx only, DNS),
+  and no container network – internal ones included – reaches services of the host.
   With Keycloak in the LAN, LibreChat has no internet at all (only Keycloak and DNS).
 - **Bifrost:** virtual key required for every request, no direct provider keys, admin login for the web interface,
   web interface on 127.0.0.1 only (SSH tunnel) or allowed IPs; LLM API from allowed IPs, OpenAI endpoints only.
@@ -479,8 +488,11 @@ What the package does:
   URLs are passed to curl via `-K`, not on the command line.
 - Links of the form `…?prompt=…&submit=true` only fill in the prompt (`autoSubmitFromUrl: false`); `/api/config`
   shows no build information (`buildInfo: false`).
-- Containers with `no-new-privileges`, `cap_drop: ALL` (except Onyx and the Firecrawl API – their images need the default
-  capabilities), memory and process limits (except Onyx), log rotation; no container gets the Docker socket.
+- Containers with `no-new-privileges`, `cap_drop: ALL` (except Onyx, the Firecrawl API and the code interpreter's MinIO
+  and sandbox runner – their images need the default capabilities), memory limits (except Onyx), log rotation; no
+  container gets the Docker socket.
+- **Code interpreter** (optional): one KVM microVM per run without network, login only with tokens signed by LibreChat,
+  no ports, internal network only, sources pinned to the release commit – details in [SECURITY.md](SECURITY.md).
 - **Builder sync:** the Keycloak service account only reads users and groups (`view-users`, `query-groups`); its
   secret and the token go to curl on stdin; the state file (Keycloak user IDs) is readable by root only.
 
@@ -502,7 +514,7 @@ Recommended outside the package (not checkable from here):
 
 ## Notes
 
-- **Interface for users:** bookmarks (labels for chats) on; prompt library, memories, presets, marketplace off;
+- **Interface for users:** bookmarks (labels for chats) on; prompt library, skills, memories, presets, marketplace off;
   "+"/multiConvo (two answers side by side) only for admins. Set in `scripts/librechat-config.py` (`interface`);
   the group roles take their permissions from there (`agent-groups.js`).
 

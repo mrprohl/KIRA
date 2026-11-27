@@ -15,7 +15,8 @@ Which container is attached to which Docker network. Source of truth: the `compo
   `kira-code` → code interpreter API, `kira-proxy` → Caddy to the web front ends. LibreChat is the only container in
   all of them.
 - **Internet only where needed**, each stack through its own egress network (`172.31.60–64.0/24`). The LAN block
-  (`kira-egress-firewall`) drops traffic from these networks to the LAN and to the host.
+  (`kira-egress-firewall`) drops traffic from these networks to the LAN and to the host – and from all internal
+  networks (`172.30.0.0/16`) to the host's own services.
 - **LibreChat has no internet** when Keycloak is in the LAN (`KEYCLOAK_INTERNAL_IP` set, or its name resolves to a
   private address) and the LAN block is on: from `kira-outbound` only Keycloak:443 and DNS are allowed. With Keycloak
   only via the internet, LibreChat gets internet like the other stacks.
