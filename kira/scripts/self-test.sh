@@ -123,7 +123,7 @@ else
     mode=$(setup_get GUARD_MODE); mode=${mode:-observe}
     if docker logs bifrost 2>&1 | grep -q "privacy-guard: active, mode=$mode"; then ok "plugin loaded (mode $mode)"
     else bad "plugin not loaded or old mode"; hint "docker logs bifrost 2>&1 | grep -i -E 'plugin|privacy-guard' – image BIFROST_IMAGE in /opt/bifrost/env/versions.env, then docker restart bifrost"; fi
-    for pair in GUARD_PRIVACY_URL:kira-privacy GUARD_SAFETY_URL:kira-safety GUARD_ANSWER_URL:kira-answer GUARD_EMBEDDING_URL:kira-embedding; do
+    for pair in GUARD_PRIVACY_URL:kira-privacy GUARD_SAFETY_URL:kira-safety GUARD_EMBEDDING_URL:kira-embedding GUARD_ANSWER_URL:kira-answer; do
       url=$(setup_get "${pair%%:*}"); model=${pair##*:}; url=${url%/}
       # from inside Bifrost (same network and firewall as in operation); the key is in its environment
       res=$(docker exec bifrost sh -c 'wget -q -T 10 -O - --header "Authorization: Bearer $VLLM_API_KEY" "$0/v1/models"' "$url" 2>&1)

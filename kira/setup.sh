@@ -289,11 +289,11 @@ fi
 ensure_yesno PRIVACY_GUARD "Privacy guard: check every request with own LLMs (vLLM) – personal or secret data is answered locally, harmful requests are refused? (kira/PRIVACY-GUARD.md)"
 if is_true PRIVACY_GUARD; then
   info "Privacy guard: addresses of the vLLM servers (one model each, served under the names kira-privacy, kira-safety,"
-  info "kira-answer, kira-embedding – vllm/README.md). Form http://IP:port; Bifrost may reach exactly these."
+  info "kira-embedding, kira-answer – vllm/README.md). Form http://IP:port; Bifrost may reach exactly these."
   ensure_text GUARD_PRIVACY_URL "vLLM address of the privacy checker (e.g. http://10.0.0.50:8101)" "$VLLM_URL_RE" "Form http://host:port."
   ensure_text GUARD_SAFETY_URL "vLLM address of the safety checker, Qwen3Guard (e.g. http://10.0.0.51:8102)" "$VLLM_URL_RE" "Form http://host:port."
-  ensure_text GUARD_ANSWER_URL "vLLM address of the local answer model (e.g. http://10.0.0.52:8103)" "$VLLM_URL_RE" "Form http://host:port."
-  ensure_text GUARD_EMBEDDING_URL "vLLM address of the embedding model (e.g. http://10.0.0.53:8104)" "$VLLM_URL_RE" "Form http://host:port."
+  ensure_text GUARD_EMBEDDING_URL "vLLM address of the embedding model (e.g. http://10.0.0.52:8103)" "$VLLM_URL_RE" "Form http://host:port."
+  ensure_text GUARD_ANSWER_URL "vLLM address of the local answer model (e.g. http://10.0.0.53:8104)" "$VLLM_URL_RE" "Form http://host:port."
   ensure_optional GUARD_MODE "Mode: observe (only decide and count – start with this) or enforce (empty = observe)" '^(observe|enforce)$' "observe or enforce."
   ensure_yesno GUARD_SLACK "Privacy guard: weekly counts (no content) to Slack?"
 fi
@@ -1122,7 +1122,7 @@ DNS=$(awk '$1=="nameserver" && $2 !~ /^127\./ && $2 !~ /:/ {print $2}' "$RESOLV"
 # Privacy guard: Bifrost may reach exactly the vLLM servers (host:port) in the LAN
 GUARD_DST=""
 if is_true PRIVACY_GUARD; then
-  for key in GUARD_PRIVACY_URL GUARD_SAFETY_URL GUARD_ANSWER_URL GUARD_EMBEDDING_URL; do
+  for key in GUARD_PRIVACY_URL GUARD_SAFETY_URL GUARD_EMBEDDING_URL GUARD_ANSWER_URL; do
     url=$(setup_get "$key"); hp=${url#*://}; hp=${hp%%/*}; host=${hp%%:*}; port=${hp##*:}
     [ "$port" = "$hp" ] && { case "$url" in https:*) port=443 ;; *) port=80 ;; esac; }
     if [[ $host =~ $IPV4_RE ]]; then ips=$host

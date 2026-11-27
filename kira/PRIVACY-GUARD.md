@@ -21,8 +21,8 @@ models themselves can only be tested on the servers – start in mode `observe`.
 |---|---|---|
 | Plugin `privacy-guard` | Go plugin in Bifrost (HTTP transport hooks): checks, decides, rewrites the request to the local model or answers it (refusal), adds the notice, logs one line per decision | `bifrost/plugins/privacy-guard/kiraguard/` (logic and tests in `guard/`) |
 | Bifrost image with plugin | the official image is linked statically and cannot load plugins; `setup.sh` builds the same Bifrost version dynamically together with the plugin (same Go, same base images as the official build) – image `kira/bifrost-guard:<tag>-<hash>`, set as `BIFROST_IMAGE` in `/opt/bifrost/env/versions.env` | `bifrost/plugins/privacy-guard/Dockerfile` |
-| vLLM (GPU servers) | one vLLM instance per model, served names `kira-privacy`, `kira-safety`, `kira-answer`, `kira-embedding` | template [`vllm/`](../vllm/README.md) – runs on the GPU servers |
-| Bifrost provider `vllm` | answer and embedding model; `allow_private_network` (they are in the LAN); `vk-librechat` may use them | `bifrost.json` (generated) |
+| vLLM (GPU servers) | one vLLM instance per model, served names `kira-privacy`, `kira-safety`, `kira-embedding`, `kira-answer` | template [`vllm/`](../vllm/README.md) – runs on the GPU servers |
+| Bifrost provider `vllm` | embedding and answer model; `allow_private_network` (they are in the LAN); `vk-librechat` may use them | `bifrost.json` (generated) |
 | Firewall | Bifrost may reach exactly the four vLLM addresses (ip:port), nothing else in the LAN | `BIFROST_LAN_DST` in `config/egress.env` |
 | Slack report | weekly counts per decision and category, can be switched off | `scripts/privacy-report.sh` (cron Mondays 08:10) |
 
@@ -31,8 +31,8 @@ models themselves can only be tested on the servers – start in mode `observe`.
 | Role | Server | Model (proposal) | Served name |
 |---|---|---|---|
 | Privacy checker | 1× A100 80 GB, alone | `Qwen/Qwen3.5-35B-A3B` (BF16, about 70 GB – tight on 80 GB; fallback the FP8 variant) with KIRA's checking prompt | `kira-privacy` |
-| Embeddings | own server, a small GPU is enough | `Qwen/Qwen3-Embedding-0.6B` (better search: `-8B`) | `kira-embedding` |
 | Safety checker | 1× A100 80 GB | `Qwen/Qwen3Guard-Gen-8B` | `kira-safety` |
+| Embeddings | own server, a small GPU is enough | `Qwen/Qwen3-Embedding-0.6B` (better search: `-8B`) | `kira-embedding` |
 | Answer model | 6× A100 80 GB | `Qwen/Qwen3.8-Flash-Next-FP8` (fallback `Qwen/Qwen3.8-27B`) | `kira-answer` |
 
 The model behind a name is set on the GPU server (`MODEL=` in the vLLM env file); KIRA only knows the names and the
@@ -94,7 +94,7 @@ with a hit to the local model – without notice.
 | Setting (`env/setup.env`) | Meaning | Default |
 |---|---|---|
 | `PRIVACY_GUARD` | `true` = on; `false` = KIRA as without the guard | asked |
-| `GUARD_PRIVACY_URL`, `GUARD_SAFETY_URL`, `GUARD_ANSWER_URL`, `GUARD_EMBEDDING_URL` | address of each vLLM instance (`http://ip:port`) | asked |
+| `GUARD_PRIVACY_URL`, `GUARD_SAFETY_URL`, `GUARD_EMBEDDING_URL`, `GUARD_ANSWER_URL` | address of each vLLM instance (`http://ip:port`) | asked |
 | `GUARD_MODE` | `observe` (decide and count, change nothing, checks in the background) · `enforce` | `observe` |
 | `GUARD_SLACK` | weekly counts to Slack | asked |
 | `GUARD_TIMEOUT` | seconds for the checks of one request | `8` |

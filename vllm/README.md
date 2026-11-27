@@ -6,9 +6,9 @@ the KIRA server** – one vLLM instance per model, each with its own env file.
 | Instance | Template | Served name | Port | Server |
 |---|---|---|---|---|
 | Privacy checker | `privacy.env.example` | `kira-privacy` | 8101 | privacy |
-| Embeddings | `embedding.env.example` | `kira-embedding` | 8104 | embedding (own server, small GPU) |
 | Safety checker | `safety.env.example` | `kira-safety` | 8102 | safety |
-| Local answer model | `answer.env.example` | `kira-answer` | 8103 | answer |
+| Embeddings | `embedding.env.example` | `kira-embedding` | 8103 | embedding (own server, small GPU) |
+| Local answer model | `answer.env.example` | `kira-answer` | 8104 | answer |
 
 The **served names** are fixed – KIRA addresses the models by them. Which model is behind a name is up to you (`MODEL=`).
 The ports are only proposals; KIRA gets the full address of each instance in `setup.sh`.
