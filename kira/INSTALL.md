@@ -1,9 +1,10 @@
 # Guide: installing KIRA (step by step)
 
-For the server `kira.example.com` (LXC <KIRA-IP>), fresh installation. Each step ends with a **checkpoint**: only continue when it passes.
+For the server `kira.example.com` (Ubuntu server <KIRA-IP> with KVM), fresh installation. Each step ends with a **checkpoint**: only continue when it passes.
 Background on architecture and modules: `/opt/kira/README.md`.
 
-Time needed: about 30 minutes without Onyx, with Onyx an additional 30–60 minutes (first start, indexing).
+Time needed: about 30 minutes without Onyx, with Onyx an additional 30–60 minutes (first start, indexing), with the
+code interpreter an additional 30–60 minutes (first build).
 
 ---
 
@@ -28,15 +29,21 @@ Have ready (do not paste into chats or tickets):
 - [ ] with agents per group: Keycloak groups and which agents each one sees (`kira/agents/groups.env.example`)
 - [ ] decision: privacy guard yes/no ([PRIVACY-GUARD.md](PRIVACY-GUARD.md)) – with yes the vLLM servers must be
       running first (step 1b)
+- [ ] decision: code interpreter yes/no – Python in a KVM sandbox, documents (Word, Excel, PowerPoint, PDF) directly
+      in the chat (`codeinterpreter/README.md`)
+- [ ] **server:** Ubuntu Server 24.04 LTS, fixed address <KIRA-IP>, 4 vCPU, 8 GB RAM, 60 GB disk (Onyx and code
+      interpreter: see below). As a VM: CPU type `host` (AVX for MongoDB) and, for the code interpreter, **nested
+      virtualisation** on the hypervisor – check on the server: `ls -l /dev/kvm` exists
 
 Only if Onyx is used:
-- [ ] enlarge the LXC to **8 vCPU, 24 GB RAM, 150 GB disk** (Proxmox)
-- [ ] on the **Proxmox host**: `echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-opensearch.conf && sysctl --system`
+- [ ] server with **8 vCPU, 24 GB RAM, 150 GB disk**
+- [ ] on the server: `echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-opensearch.conf && sysctl --system`
 - [ ] DNS record for the Onyx domain (e.g. `onyx.example.com`) pointing to the public IP of the upstream proxy, and add the
       domain to that proxy
 - [ ] public IPs of the admins who may open the Onyx web interface (`ONYX_ALLOWED_IPS`)
-- [ ] decision: office documents yes/no (Word, Excel, PowerPoint with download links, `OFFICE_DOCUMENTS`)
-- [ ] decision: code interpreter yes/no – needs an own server with KVM (`codeinterpreter/README.md`); its address
+
+Only if the code interpreter is used:
+- [ ] additionally **2 GB RAM per parallel run** (default 4 → 8 GB) plus 2 GB for its services, and **30 GB disk**
 
 **Checkpoint:** everything ticked.
 
@@ -67,11 +74,19 @@ served name. (They can also be started after step 3 – the self-test then repor
 
 ```bash
 ss -tlnp | grep -E ':(80|443|8080) '                   # ports must be free – no output
-apt install -y cron python3 curl openssl unzip
+apt install -y cron python3 curl openssl unzip git
+docker compose version || curl -fsSL https://get.docker.com | sh   # Docker Engine with Compose plugin
+ls -l /dev/kvm                                          # only for the code interpreter: must exist
 cd /root && unzip -o kira-stack.zip -d /opt             # extract directly on the server, not on Windows
 umask 077; scp root@<KEYCLOAK-IP>:/opt/keycloak/env/kira-client-kira.env /opt/kira/env/keycloak-client.env
-ls /opt                                                 # caddy bifrost kira websearch onyx office codeinterpreter vllm
+ls /opt                                                 # caddy bifrost kira websearch onyx codeinterpreter vllm
 ```
+
+**Moving from the old server:** run `/opt/kira/scripts/backup.sh` there and copy the backup folder
+(`/var/backups/kira/<date>/`) over. On the new server extract `opt-stacks.tgz` to `/opt` **before** the package
+(`tar xzf opt-stacks.tgz -C /opt` – keeps all secrets and answers), then the package over it as above. `setup.sh` then
+only asks the new questions; afterwards restore the databases and uploads (README, section "Operations" → Restore).
+The certificates are requested again.
 
 The certificates live in the volume `caddy_data` and survive a reinstall.
 
@@ -94,8 +109,7 @@ Answers for this server:
 | upstream reverse proxy | `<PROXY-IP>` |
 | internal IP of the Keycloak server | `<KEYCLOAK-IP>` |
 | Onyx / images / speech | as decided in step 1; speech output e.g. `gpt-4o-mini-tts`, leave the default voice empty (= `fable`) |
-| Office documents? | as decided in step 1; link lifetime empty = 24 hours |
-| Code interpreter? | as decided in step 1; with `yes` the address of the code server (e.g. `http://<ip>:3112`) |
+| Code interpreter? | as decided in step 1; parallel runs empty = `4` |
 | Privacy guard? | as decided in step 1; with `yes`: the four vLLM addresses from step 1b, mode `observe`, Slack counts `yes`; vLLM API key empty = generate |
 | Restrict agents per Keycloak group? | `yes` if the groups are set up in Keycloak – mapper `groups`, default group `kira-users-default` under *Realm settings* → *User registration* → *Default groups* (README, section "Agents per Keycloak group"), otherwise `no` |
 | How long does a login stay active? | empty = `30d` (possible `8h` to `365d`) |
@@ -117,9 +131,10 @@ Answers for this server:
 | Uptime Kuma push URLs | from step 1, internal IP of Uptime Kuma |
 | Start the stacks now? | `yes` |
 
-`setup.sh` pulls the images, starts bifrost → websearch → kira → (onyx) → caddy and runs the self-test.
-On first start this takes a few minutes, with Onyx up to 20 minutes. With the privacy guard it first builds Bifrost
-with the plugin (another 5–15 minutes).
+`setup.sh` pulls the images, starts bifrost → websearch → (codeinterpreter) → kira → (onyx) → caddy and runs the
+self-test. On first start this takes a few minutes, with Onyx up to 20 minutes. With the privacy guard it first builds
+Bifrost with the plugin (another 5–15 minutes), with the code interpreter it builds that from source (30 minutes or
+more, only the first time and after a version change).
 
 **Checkpoint:** at the end "Self-test: all OK." – apart from the note on the certificate if Let's Encrypt is still
 running. On errors the self-test shows the next command for each item; see section "Troubleshooting" in the README.
@@ -244,24 +259,20 @@ beantwortet". After one or two weeks: `scripts/privacy-report.sh`, then `GUARD_M
 
 ---
 
-## Step 8c – Office documents and code interpreter (only if enabled)
-
-Office documents: `bash /opt/kira/scripts/self-test.sh` – section "Office documents" uploads a test file through Caddy
-and downloads it with a signed link. In KIRA: "Erstelle eine Word-Datei mit einer kurzen Einladung zum Sommerfest" –
-the answer contains a link to the `.docx`. Own letterhead: `custom_docx_template.docx` in `/opt/office/templates`.
-
-Code interpreter (on the code server, see `codeinterpreter/README.md`):
+## Step 8c – Code interpreter (only if enabled)
 
 ```bash
-scp root@<KIRA-IP>:/opt/kira/config/codeapi-jwks.json /opt/codeinterpreter/jwks.json
-bash /opt/codeinterpreter/setup-codeapi.sh      # first build 30 minutes or more
-ufw allow from <KIRA-IP> to any port 3112 proto tcp
+bash /opt/codeinterpreter/codeapi.sh ps                 # all services "Up", codeapi-sandbox "healthy"
+bash /opt/kira/scripts/self-test.sh                     # section "Code interpreter": a Python run writes a .docx
 ```
 
-Then on the KIRA server `bash /opt/kira/scripts/self-test.sh` – section "Code interpreter". In KIRA: "Rechne mit Code:
-Wie viele Tage sind es bis Weihnachten? Erstelle dazu eine CSV-Datei." – the answer contains the result and the file.
+In KIRA (agent **KIRA**):
+1. "Erstelle eine Word-Datei mit einer Einladung zum Sommerfest am 3. Juli" → the `.docx` appears in the chat; click
+   it → preview in the side panel, download works.
+2. "Erstelle eine Excel-Tabelle mit den Monaten 2027 und einer Summenzeile" → `.xlsx` with formulas.
+3. Upload a CSV, "Zeichne ein Diagramm der Werte" → chart in the chat.
 
-**Checkpoint:** both self-test sections OK, a document and a file from the code interpreter downloaded.
+**Checkpoint:** self-test section "Code interpreter" OK, all three files open.
 
 ---
 

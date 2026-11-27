@@ -15,7 +15,6 @@
 # LIBRECHAT_ONLY_DST: if set (Keycloak in the LAN), LibreChat (kira-outbound) gets no internet at all – only these
 # destinations on port 443 plus DNS. Everything else LibreChat needs runs over the internal networks.
 # BIFROST_LAN_DST: privacy guard – vLLM servers in the LAN (ip:port) that only Bifrost (bifrost-outbound) may reach.
-# LIBRECHAT_EXTRA_DST: code interpreter – the code server (ip:port) LibreChat may reach (LAN, or internet in strict mode).
 # ============================================================================
 set -euo pipefail
 
@@ -34,7 +33,6 @@ ALLOW_PRIVATE_DST=""
 ALLOW_DNS=""
 LIBRECHAT_ONLY_DST=""
 BIFROST_LAN_DST=""
-LIBRECHAT_EXTRA_DST=""
 # shellcheck source=/dev/null
 [ -f "$CONF" ] && . "$CONF"
 
@@ -60,10 +58,6 @@ apply() {
       iptables -A "$CHAIN" -s "$src" -d "$ip" -p tcp --dport 443 -j RETURN
     done
   done
-  # code interpreter: LibreChat to the code server, exactly ip:port
-  for dst in $LIBRECHAT_EXTRA_DST; do
-    iptables -A "$CHAIN" -s "$LC_SOURCE" -d "${dst%:*}" -p tcp --dport "${dst##*:}" -j RETURN
-  done
   # privacy guard: Bifrost to the vLLM servers in the LAN, exactly ip:port
   for dst in $BIFROST_LAN_DST; do
     iptables -A "$CHAIN" -s "$BIFROST_SOURCE" -d "${dst%:*}" -p tcp --dport "${dst##*:}" -j RETURN
@@ -79,9 +73,6 @@ apply() {
     for ip in $ALLOW_DNS; do
       iptables -A "$CHAIN_LC" -d "$ip" -p udp --dport 53 -j RETURN
       iptables -A "$CHAIN_LC" -d "$ip" -p tcp --dport 53 -j RETURN
-    done
-    for dst in $LIBRECHAT_EXTRA_DST; do
-      iptables -A "$CHAIN_LC" -d "${dst%:*}" -p tcp --dport "${dst##*:}" -j RETURN
     done
     for ip in $LIBRECHAT_ONLY_DST; do
       iptables -A "$CHAIN_LC" -d "$ip" -p tcp --dport 443 -j RETURN
@@ -111,7 +102,6 @@ apply() {
   done
   echo "LAN block active: ${SOURCES[*]} -> no private destinations${ALLOW_PRIVATE_DST:+ (exception: $ALLOW_PRIVATE_DST:443 for LibreChat and Onyx)}."
   [ -z "$LIBRECHAT_ONLY_DST" ] || echo "LibreChat ($LC_SOURCE): no internet – only $LIBRECHAT_ONLY_DST:443 and DNS."
-  [ -z "$LIBRECHAT_EXTRA_DST" ] || echo "LibreChat ($LC_SOURCE): additionally the code server $LIBRECHAT_EXTRA_DST."
   [ -z "$BIFROST_LAN_DST" ] || echo "Bifrost ($BIFROST_SOURCE): additionally the vLLM servers $BIFROST_LAN_DST (privacy guard)."
 }
 

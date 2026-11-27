@@ -29,13 +29,8 @@ flowchart LR
     OX[<b>Onyx</b><br/>intranet index, MCP]
   end
 
-  subgraph office["/opt/office (optional)"]
-    OM[<b>Office MCP</b><br/>Word, Excel, PowerPoint]
-    OF[<b>kira-files</b><br/>signed download links]
-  end
-
-  subgraph code["Own server with KVM (optional)"]
-    CI[<b>Code interpreter</b><br/>sandbox, files, charts]
+  subgraph code["/opt/codeinterpreter (optional, KVM)"]
+    CI[<b>Code interpreter</b><br/>Python in a KVM sandbox<br/>Word, Excel, PowerPoint, PDF]
   end
 
   subgraph gpu["GPU servers in the LAN (optional)"]
@@ -58,10 +53,7 @@ flowchart LR
   SX & FC ==>|internet| WEB([<b>Search engines,<br/>web pages</b>])
   OX ==>|internet| SP([<b>SharePoint / Graph</b>])
   BF -.->|privacy guard| VL
-  LC -->|MCP: documents| OM
-  OM -->|upload| OF
-  C -->|/kira-files/ links| OF
-  LC -.->|run code| CI
+  LC -->|run code, files into the chat| CI
 
   classDef ext fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A,stroke-width:1.5px
   classDef svc fill:#EEEDFE,stroke:#534AB7,color:#26215C,stroke-width:1.5px
@@ -73,16 +65,15 @@ flowchart LR
   class AI,WEB,SP net
   classDef opt fill:#FAEEDA,stroke:#854F0B,color:#412402,stroke-width:1.5px,stroke-dasharray:5 4
   class VL,CI opt
-  class OM,OF svc
   style caddy fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style kira fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style bifrost fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style websearch fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style onyx fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
-  style office fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
   style code fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
   style gpu fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
   linkStyle default stroke:#5F5E5A,stroke-width:1.6px
   linkStyle 17,18,19,20 stroke:#993C1D,stroke-width:3px
   linkStyle 16 stroke:#5F5E5A,stroke-width:1.6px,stroke-dasharray:6 5
-  linkStyle 21,25 stroke:#854F0B,stroke-width:2px,stroke-dasharray:6 5
+  linkStyle 21 stroke:#854F0B,stroke-width:2px,stroke-dasharray:6 5
+  linkStyle 22 stroke:#854F0B,stroke-width:2px

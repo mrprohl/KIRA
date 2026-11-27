@@ -22,15 +22,16 @@ ENDPOINT = "Bifrost"               # name of the custom endpoint (invisible to u
 PROVIDER_LABELS = {"anthropic": "Anthropic", "openai": "OpenAI"}
 BIFROST_JSON = os.environ.get("BIFROST_JSON", "/opt/bifrost/config/bifrost.json")
 TITLE_MODEL = "anthropic/claude-haiku-5-5"
-TITLE_ALIAS = "kira/title"
-# added to the instruction of agents with OFFICE=true / CODE=true (German, the agents answer in German)
-OFFICE_PROMPT = ("Dokumente: Wenn der Nutzer ein Word-, Excel- oder PowerPoint-Dokument oder einen E-Mail-Entwurf "
-                 "möchte, erstelle es mit den Office-Werkzeugen und gib den Download-Link als Markdown-Link aus "
-                 "(z. B. [Bericht.docx](Link)). Weise darauf hin, dass der Link nur begrenzt gültig ist. Für PDF "
-                 "biete Word an, falls kein anderes Werkzeug PDF erstellen kann.")
-CODE_PROMPT = ("Code: Für Berechnungen, Auswertungen hochgeladener Dateien, Diagramme und Dateien, die die "
-               "Office-Werkzeuge nicht können (z. B. PDF, CSV), nutze die Code-Ausführung. Erzeugte Dateien legst "
-               "du in /mnt/data ab, sie erscheinen dann zum Download im Chat.")                          # with the privacy guard (title_alias in bifrost.json)
+TITLE_ALIAS = "kira/title"                          # with the privacy guard (title_alias in bifrost.json)
+# added to the instruction of agents with CODE=true (German, the agents answer in German)
+CODE_PROMPT = ("Code-Ausführung und Dokumente: Für Berechnungen, Auswertungen hochgeladener Dateien und Diagramme "
+               "nutze die Code-Ausführung (Python, ohne Internet). Möchte der Nutzer ein Dokument, erstelle die Datei "
+               "mit Python und speichere sie in /mnt/data – sie erscheint dann im Chat mit Vorschau und Download: "
+               "Word mit python-docx (.docx), Excel mit openpyxl (.xlsx, mit Formeln und Formatierung), PowerPoint "
+               "mit python-pptx (.pptx), PDF mit reportlab, CSV mit pandas. Wähle einen sprechenden deutschen "
+               "Dateinamen (z. B. Protokoll_2026-11-27.docx), deutsche Datums- und Zahlenformate und eine saubere "
+               "Gestaltung (Überschriften, Tabellen mit Kopfzeile). Hat der Nutzer eine Vorlage hochgeladen, nutze "
+               "sie als Grundlage (Word z. B. mit docxtpl). Fasse danach kurz zusammen, was die Datei enthält.")
 # image agent (stored agent): own endpoint, so that builders (own agents) can use it without getting "Bifrost"
 IMAGE_ENDPOINT = "Bild-Agent"
 IMAGE_AGENT_MODEL = "anthropic/claude-haiku-5-5"   # only writes the image description
@@ -284,11 +285,8 @@ def load_agents(setup, onyx_ready, compact_at=None):
                 prompt = fh.read().replace("\r\n", "\n").replace("\t", "    ").strip()
         is_image = is_yes(a.get("IMAGES"), "IMAGES", where)
         is_intranet = is_yes(a.get("INTRANET"), "INTRANET", where)
-        # office documents and code interpreter: only if switched on in setup.sh, otherwise silently without
-        with_office = is_yes(a.get("OFFICE", "false"), "OFFICE", where) and setup.get("_office_ready", False)
+        # code interpreter (also documents): only if switched on in setup.sh, otherwise silently without
         with_code = is_yes(a.get("CODE", "false"), "CODE", where) and setup.get("_code_ready", False)
-        if with_office:
-            prompt = (prompt + "\n\n" if prompt else "") + OFFICE_PROMPT
         if with_code:
             prompt = (prompt + "\n\n" if prompt else "") + CODE_PROMPT
 
@@ -347,7 +345,7 @@ def load_agents(setup, onyx_ready, compact_at=None):
         spec["webSearch"] = is_yes(a.get("WEB_SEARCH"), "WEB_SEARCH", where)
         spec["fileSearch"] = is_yes(a.get("FILE_SEARCH"), "FILE_SEARCH", where)
         spec["executeCode"] = with_code
-        spec["mcpServers"] = (["intranet"] if is_intranet else []) + (["office"] if with_office else [])
+        spec["mcpServers"] = ["intranet"] if is_intranet else []
         spec["hideBadgeRow"] = True
         specs.append(spec)
 
@@ -543,7 +541,6 @@ def main():
     where = "env/setup.env"
     setup = {
         "ONYX_ENABLED": is_yes(s.get("ONYX_ENABLED"), "ONYX_ENABLED", where),
-        "OFFICE_DOCUMENTS": is_yes(s.get("OFFICE_DOCUMENTS", "false"), "OFFICE_DOCUMENTS", where),
         "CODE_INTERPRETER": is_yes(s.get("CODE_INTERPRETER", "false"), "CODE_INTERPRETER", where),
         "SEND_USER_HEADERS": is_yes(s.get("SEND_USER_HEADERS"), "SEND_USER_HEADERS", where),
         "IMAGE_GENERATION": is_yes(s.get("IMAGE_GENERATION"), "IMAGE_GENERATION", where),
@@ -564,7 +561,6 @@ def main():
     if privacy_url and not url_re.match(privacy_url):
         fail(f"{where}: PRIVACY_URL={privacy_url!r} is not a valid https address.")
     onyx_ready = setup["ONYX_ENABLED"] and bool(lc.get("ONYX_API_KEY"))
-    setup["_office_ready"] = setup["OFFICE_DOCUMENTS"] and bool(lc.get("OFFICE_MCP_API_KEY"))
     setup["_code_ready"] = setup["CODE_INTERPRETER"] and bool(lc.get("LIBRECHAT_CODE_BASEURL"))
     compact_at = number(s.get("COMPACT_AT"), "COMPACT_AT", where, 0, 1000000, 100000)
     if 0 < compact_at < 20000:
@@ -664,7 +660,7 @@ def main():
             "webSearch": True,
             "fileSearch": True,
             "fileCitations": True,
-            # code interpreter (own server, setup.sh): "Run Code" on code blocks and execution for agents
+            # code interpreter (stack codeinterpreter, setup.sh): "Run Code" on code blocks and execution for agents
             "runCode": bool(setup.get("_code_ready")),
             "memories": False,
             "feedback": False,
@@ -795,28 +791,16 @@ def main():
     if "textToSpeech" not in tab:
         tab["textToSpeech"] = False
 
-    mcp, allowed = {}, []
     if onyx_ready:
-        mcp["intranet"] = {
-            "type": "streamable-http",
-            "url": "http://onyx-mcp:8090/",
-            "headers": {"Authorization": "Bearer ${ONYX_API_KEY}"},
-            "timeout": 60000,
+        cfg["mcpServers"] = {
+            "intranet": {
+                "type": "streamable-http",
+                "url": "http://onyx-mcp:8090/",
+                "headers": {"Authorization": "Bearer ${ONYX_API_KEY}"},
+                "timeout": 60000,
+            }
         }
-        allowed.append("onyx-mcp:8090")
-    if setup.get("_office_ready"):
-        # Office MCP server (stack office): Word, Excel, PowerPoint, e-mail drafts – answers with a download link
-        mcp["office"] = {
-            "type": "streamable-http",
-            "title": "Office-Dokumente",
-            "url": "http://office-mcp:8958/mcp",
-            "headers": {"Authorization": "Bearer ${OFFICE_MCP_API_KEY}"},
-            "timeout": 120000,
-        }
-        allowed.append("office-mcp:8958")
-    if mcp:
-        cfg["mcpServers"] = mcp
-        cfg["mcpSettings"] = {"allowedAddresses": allowed}
+        cfg["mcpSettings"] = {"allowedAddresses": ["onyx-mcp:8090"]}
 
     header = [
         "# ============================================================================",

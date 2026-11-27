@@ -2,9 +2,9 @@
 
 # KIRA – AI assistant (proof of concept)
 
-As of 24.11.2026 · package `kira-stack.zip`, extracted to `/opt`. Chat interface **LibreChat** with fixed agents,
-models via the gateway **Bifrost**, web search via **SearXNG + Firecrawl**, intranet search (optional) via **Onyx**.
-Login via Keycloak SSO only (forwarding to Microsoft 365).
+As of 27.11.2026 · package `kira-stack.zip`, extracted to `/opt`. Chat interface **LibreChat** with fixed agents,
+models via the gateway **Bifrost**, web search via **SearXNG + Firecrawl**, intranet search (optional) via **Onyx**,
+code and documents (optional) via the **code interpreter** in a KVM sandbox. Login via Keycloak SSO only (forwarding to Microsoft 365).
 Step-by-step installation: `INSTALL.md`.
 
 ## Architecture
@@ -40,12 +40,9 @@ flowchart LR
     OX[Onyx<br/>intranet index, MCP]
   end
 
-  subgraph office["/opt/office (optional)"]
-    OM[Office MCP<br/>Word, Excel, PowerPoint]
-    OF[kira-files<br/>download links]
+  subgraph codei["/opt/codeinterpreter (optional)"]
+    CI[Code interpreter<br/>KVM sandbox: Python,<br/>Word, Excel, PowerPoint, PDF]
   end
-
-  CI[Code interpreter<br/>own server with KVM, optional]
 
   C --> LC
   C -->|LLM API, admin UI| BF
@@ -57,10 +54,7 @@ flowchart LR
   LC -->|web search| SX & FC
   LC -->|MCP: agent Intranet| OX
   OX -->|LLM| BF
-  LC -->|MCP: documents| OM
-  OM -->|upload via Caddy| OF
-  C -->|/kira-files/ links| OF
-  LC -->|run code| CI
+  LC -->|run code, files back into the chat| CI
   BF --> BDB
   LC -.->|OIDC| KC([Keycloak → Microsoft 365])
   BF ==>|internet| AI([Anthropic, OpenAI])
@@ -84,9 +78,7 @@ Large version as an image: [docs/architecture.png](docs/architecture.png).
 | websearch | SearXNG | meta search (Google, Bing, Brave, Startpage, Mojeek) without account or API costs | returns the result list |
 | | Firecrawl (+ Playwright, Redis, RabbitMQ, Postgres) | fetches the result pages and turns them into readable text | the model itself cannot access the internet via the API |
 | onyx | Onyx Community Edition | indexes SharePoint (documents, notes …), provides the search via MCP | intranet knowledge without uploading per agent; needs 12–16 GB RAM |
-| office | Office MCP server ([mcp-ms-office-documents](https://github.com/ForLegalAI/mcp-ms-office-documents), MIT) | creates Word, Excel, PowerPoint files and e-mail drafts, also from own templates | documents on request, without code execution |
-| | kira-files (`office/files/kira_files.py`) | keeps the files, hands them out only with a signed, time-limited link | download link in the chat (LibreChat cannot take files from an MCP server) |
-| own server | code interpreter ([ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter), Apache 2.0) | runs code written by the model in a KVM sandbox: analyses, charts, PDF/CSV | needs hardware virtualisation – [codeinterpreter/README.md](../codeinterpreter/README.md) |
+| codeinterpreter | code interpreter ([ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter), Apache 2.0): API, worker, KVM sandbox, file server, Redis, MinIO | runs Python written by the model in a small VM per run: analyses, charts and documents (Word, Excel, PowerPoint, PDF, CSV) | files appear directly in the chat with preview and download; built from source, needs `/dev/kvm` – [codeinterpreter/README.md](../codeinterpreter/README.md) |
 
 ## Connections and networks
 
@@ -102,11 +94,12 @@ With Keycloak in the LAN (`KEYCLOAK_INTERNAL_IP`) LibreChat gets no internet at 
 | `kira-llm` | 172.30.21.0/24, internal | Bifrost, LibreChat, RAG API, Onyx | models/embeddings via Bifrost |
 | `kira-search` | 172.30.22.0/24, internal | LibreChat, SearXNG, Firecrawl | web search |
 | `kira-onyx` | 172.30.23.0/24, internal | LibreChat, Onyx MCP | agent "Intranet" |
-| `kira-office` | 172.30.28.0/24, internal | Caddy (.2), LibreChat, Office MCP, kira-files | documents and their download links |
+| `kira-code` | 172.30.29.0/24, internal | LibreChat, code interpreter API (`codeapi`) | run code |
 | `*_backend` | 172.30.24–27.0/24, internal | each stack's databases | databases only within their own stack |
+| `codeinterpreter_backend` | 172.30.30.0/24, internal | all code interpreter services | sandbox ↔ egress gateway, file server, Redis, MinIO – no internet |
 | `kira-edge` | 172.31.60.0/24 | Caddy | certificates |
 | `bifrost-outbound` | 172.31.61.0/24 | Bifrost | Anthropic, OpenAI |
-| `kira-outbound` | 172.31.62.0/24 | LibreChat | Keycloak (OIDC) – with `KEYCLOAK_INTERNAL_IP` nothing else (no internet); with the code interpreter also its server (exactly ip:port) |
+| `kira-outbound` | 172.31.62.0/24 | LibreChat | Keycloak (OIDC) – with `KEYCLOAK_INTERNAL_IP` nothing else (no internet) |
 | `websearch-outbound` | 172.31.63.0/24 | SearXNG, Firecrawl | search engines, web pages |
 | `onyx-outbound` | 172.31.64.0/24 | Onyx | SharePoint, Hugging Face (models on first start) |
 
@@ -114,11 +107,13 @@ MongoDB, Meilisearch, pgvector, the RAG API and all databases have no internet a
 
 ## Installation
 
-Requirements: Docker with Compose ≥ 2.20, `python3`, `curl`, `openssl`; about 8 GB RAM without Onyx, 24 GB with Onyx.
-Ports 80 and 443 must be free. The certificates live in the volume `caddy_data` and survive a reinstall.
+Requirements: Ubuntu Server (24.04 LTS recommended), Docker with Compose ≥ 2.20, `python3`, `curl`, `openssl`; about
+8 GB RAM without Onyx, 24 GB with Onyx. With the code interpreter additionally: hardware virtualisation (`/dev/kvm` –
+bare metal or a VM with nested virtualisation, **not** an LXC container), Compose ≥ 2.24, `git`, about 2 GB RAM per
+parallel code run (`CODE_PARALLEL`, default 4) and 30 GB disk for its images. Ports 80 and 443 must be free. The certificates live in the volume `caddy_data` and survive a reinstall.
 
 ```bash
-unzip -o kira-stack.zip -d /opt          # creates /opt/caddy, bifrost, kira, websearch, onyx – extract directly on the server
+unzip -o kira-stack.zip -d /opt          # creates /opt/caddy, bifrost, kira, websearch, onyx, codeinterpreter – on the server
 # optional: take over the Keycloak client (setup.sh then does not ask for it)
 umask 077; scp root@<keycloak-host>:/opt/keycloak/env/kira-client-kira.env /opt/kira/env/keycloak-client.env
 bash /opt/kira/setup.sh                  # asks everything, sets permissions, starts on request and tests
@@ -126,8 +121,9 @@ bash /opt/kira/setup.sh                  # asks everything, sets permissions, st
 
 `setup.sh` creates the secrets, generates the configurations, the Docker networks, the LAN block (systemd) and
 `/etc/cron.d/kira` (monitoring, backup, cost report). Running it again is safe. Start order:
-bifrost → websearch → kira → onyx → caddy – via CLI from `setup.sh` or in Portainer
-(paste `/opt/<stack>/docker-compose.yml` for each stack, no environment variables).
+bifrost → websearch → codeinterpreter → kira → onyx → caddy – via CLI from `setup.sh` or in Portainer
+(paste `/opt/<stack>/docker-compose.yml` for each stack, no environment variables). The code interpreter is built
+from source and is only started by `setup.sh` (or `codeinterpreter/codeapi.sh`), not in Portainer.
 
 **Keycloak** (client `kira`): valid redirect URI `https://<kira-domain>/oauth/openid/callback`, post-logout redirect
 `https://<kira-domain>/login`; PKCE S256; mapper "User Client Role" with claim name `roles` in the **ID token**.
@@ -165,8 +161,7 @@ restarts the affected services.
 | `KEYCLOAK_INTERNAL_IP` | Keycloak directly in the LAN (extra_hosts + exception in the LAN block); LibreChat then gets no internet, only Keycloak:443 and DNS |
 | `LLM_API_DOMAIN`, `BIFROST_UI_DOMAIN` (+ `…_ALLOWED_IPS`) | LLM API for external applications and Bifrost web interface from outside |
 | `AGENT_BUILDER` | only switch via `scripts/agent-builder.sh on|off` |
-| `OFFICE_DOCUMENTS`, `OFFICE_LINK_HOURS` | Word, Excel, PowerPoint and e-mail drafts with download link (stack office); links valid 24 h by default – section "Office documents" |
-| `CODE_INTERPRETER`, `CODE_API_URL` | code interpreter on an own server with KVM – section "Code interpreter" |
+| `CODE_INTERPRETER`, `CODE_PARALLEL` | code interpreter (stack codeinterpreter, needs `/dev/kvm`): analyses, charts and documents in the chat; `CODE_PARALLEL` = runs at the same time (1–16, default 4) – section "Code interpreter" |
 | `PRIVACY_GUARD`, `GUARD_*` | privacy guard with own LLMs on vLLM servers: personal/secret data answered locally, harmful requests refused – [PRIVACY-GUARD.md](PRIVACY-GUARD.md). `false` = as without it |
 
 ## Agents
@@ -363,39 +358,27 @@ could search the indexed intranet content. KIRA itself talks to Onyx internally 
 
 OpenSearch needs `vm.max_map_count=262144` on the host (for LXC set it on the Proxmox host; `setup.sh` warns).
 
-## Office documents
-
-With `OFFICE_DOCUMENTS=true` the agents with `OFFICE=true` (KIRA, writing, minutes) create files on request:
-"Mach daraus eine Word-Datei", "Erstelle eine Excel-Tabelle mit …", "Bau mir 5 Folien zu …", "Entwirf eine E-Mail an …".
-
-1. LibreChat calls the tool of the Office MCP server (stack `office`); the model passes the content (Markdown or a slide
-   structure).
-2. The server builds the file and uploads it to kira-files – via Caddy to `https://<KIRA domain>/kira-files/…`, so the
-   link is signed for the public address.
-3. The answer contains the link, e.g. `[Bericht.docx](https://kira.example.com/kira-files/…)`. It works without login
-   but only with the signature and only for `OFFICE_LINK_HOURS` (default 24 h); then kira-files deletes the file.
-
-| What | Where |
-|---|---|
-| own letterhead, styles, PowerPoint design | `/opt/office/templates/` (`custom_docx_template.docx`, `custom_pptx_template_16_9.pptx`, …) |
-| template tools with `{{placeholders}}` (e.g. a fixed letter) | `/opt/office/config/` (`docx_templates.yaml`, `email_templates.yaml`, `pptx_templates.yaml`) – [templates](https://github.com/ForLegalAI/mcp-ms-office-documents/blob/main/docs/templates.md) |
-| link lifetime | `OFFICE_LINK_HOURS` in `env/setup.env`, then `setup.sh` |
-| test | `scripts/self-test.sh` – section "Office documents" uploads and downloads a test file |
-
-Templates are re-read on change, no restart needed. PDF is not possible with the Office tools – the code interpreter
-can do it. Who has the link can download the file until it expires: do not forward links of confidential documents.
-
 ## Code interpreter
 
-With `CODE_INTERPRETER=true` the agents with `CODE=true` (KIRA, code) may run code; "Run Code" appears on code blocks.
-The code runs on **an own server with KVM** (hardware virtualisation), never on the KIRA server – setup there:
-[codeinterpreter/README.md](../codeinterpreter/README.md).
+With `CODE_INTERPRETER=true` the agents with `CODE=true` (KIRA, Code, Textwerkstatt, Protokoll) run Python in a
+sandbox. That covers calculations, analyses of uploaded files, charts – and **documents**: the model writes the file
+with python-docx, openpyxl, python-pptx or reportlab to `/mnt/data`, and LibreChat shows it **in the chat** – Word,
+Excel and PowerPoint with a preview in the side panel, every file with a download button. The files are stored in
+LibreChat like uploads (deleted with the chat, `CHAT_RETENTION`).
 
-- `setup.sh` asks for the address (`CODE_API_URL`, e.g. `http://10.0.0.60:3112`), generates an Ed25519 key pair and
-  writes the public key to `/opt/kira/config/codeapi-jwks.json` – copy it to the code server (`jwks.json`).
-- LibreChat signs a short token (5 minutes) per run; the code server accepts nothing else.
-- The firewall lets LibreChat reach exactly this ip:port (`LIBRECHAT_EXTRA_DST` in `config/egress.env`).
-- Files the code creates (`/mnt/data`) appear in the chat for download; they are stored in LibreChat like uploads.
+```
+LibreChat ── kira-code ──► codeapi (API) ─► worker ─► sandbox: one small VM per run (own kernel, no network)
+ (signed token, Ed25519, 5 min)                       └► egress gateway ─► file server ─► MinIO   (all internal)
+```
+
+- Stack `/opt/codeinterpreter`: `setup.sh` clones the pinned release (`CODEAPI_VERSION` in `env/versions.env`) to
+  `src/`, generates the secrets (`env/codeapi.env`) and builds the images – the first build takes 30 minutes or more,
+  later runs of `setup.sh` only build again when the version changes.
+- Login: LibreChat signs a token per request with its private key (`env/librechat.env`); the code interpreter only
+  knows the public key. No published ports, no internet, no LAN – the sandbox only reaches the egress gateway.
+- Own templates (letterhead): upload the `.docx`/`.pptx` in the chat and ask KIRA to use it.
+- Operation: `bash /opt/codeinterpreter/codeapi.sh ps | logs --tail 50 <service> | restart` – details in
+  [codeinterpreter/README.md](../codeinterpreter/README.md).
 
 ## Operations
 
@@ -411,14 +394,17 @@ The code runs on **an own server with KVM** (hardware virtualisation), never on 
 | Backup | daily at 02:30 to `/var/backups/kira/<date>/` (Bifrost DB, MongoDB, RAG, Onyx DB, uploads, `/opt` stacks incl. secrets), 14 days; push "KIRA Backup" |
 | Versions | edit `/opt/<stack>/env/versions.env`, redeploy the stack. Back up first. Pinned versions instead of `latest` where possible. With the privacy guard, Bifrost: change `BIFROST_TAG`, then `setup.sh` (builds the image with the plugin) |
 | Caddy | site blocks `/opt/caddy/config/sites/*.caddy` freely editable, `docker exec caddy caddy reload --config /etc/caddy/Caddyfile` |
-| Office documents | `docker compose -f /opt/office/docker-compose.yml logs --tail 50`; templates in `/opt/office/templates` and `/opt/office/config` |
-| Code interpreter | on the code server: `docker compose -p codeinterpreter ps`; from KIRA: `scripts/self-test.sh` (section "Code interpreter") |
+| Code interpreter | `bash /opt/codeinterpreter/codeapi.sh ps` · `… logs --tail 50 sandbox-runner`; end-to-end test: `scripts/self-test.sh` (section "Code interpreter"); update: `CODEAPI_VERSION` in `/opt/codeinterpreter/env/versions.env`, then `setup.sh` |
 | Privacy guard | decisions `docker logs bifrost 2>&1 \| grep 'privacy-guard mode='`, counts `scripts/privacy-report.sh` – [PRIVACY-GUARD.md](PRIVACY-GUARD.md) |
 | Logo and favicon | replace the files in `/opt/kira/branding/`, `bash /opt/kira/setup.sh` (restarts LibreChat) – section "Branding" |
 
-**Restore** (stop the stack, start only the database): `pg_restore -U postgres -d bifrost --clean` or
-`mongorestore --archive --gzip --drop` (with the user from `env/mongodb.env`, `--authenticationDatabase admin`) with the
-files from the backup; extract `opt-stacks.tgz` to `/opt` if needed. The Meilisearch and OpenSearch indexes are rebuilt.
+**Restore** (stop the stack, start only the database): `pg_restore -U postgres -d bifrost --clean` (Bifrost;
+`rag.dump` the same way in `librechat-vectordb`, `onyx.dump` in `onyx-db`) or `mongorestore --archive --gzip --drop`
+(with the user from `env/mongodb.env`, `--authenticationDatabase admin`) with the files from the backup; uploads and
+images: `zcat librechat-uploads.tar.gz | docker cp - librechat:/app` and
+`zcat librechat-images.tar.gz | docker cp - librechat:/app/client/public`. Extract `opt-stacks.tgz` to `/opt` if
+needed (on a new server **before** the package – it holds the secrets). The Meilisearch and OpenSearch indexes are
+rebuilt.
 
 ## Branding
 
@@ -447,10 +433,11 @@ KIRA app may have to be installed again.
 | `$'\r': command not found` when starting setup.sh | file edited on Windows: `sed -i 's/\r$//' /opt/kira/setup.sh` |
 | `env file … not found` in Portainer | `setup.sh` has not run, or Portainer has no volume `/opt:/opt:ro` |
 | images cannot be pulled | check tag/registry in `env/versions.env` (LibreChat: fall back to `ghcr.io/librechat-ai/…`) |
-| office documents: no link, "upload failed" | `docker logs --tail 30 office-mcp`; with the IP allowlist in `kira.caddy` (`@blocked not client_ip …`) add `172.30.28.0/24`, otherwise Caddy blocks the uploads |
-| download link: "Der Download-Link ist abgelaufen" / file gone | links are valid `OFFICE_LINK_HOURS` (default 24 h) – ask KIRA to create the file again |
-| code interpreter: "connection refused" / timeout | code server running? `LIBRECHAT_EXTRA_DST` in `config/egress.env`, firewall of the code server (port 3112 from the KIRA server) |
-| code interpreter: 401 | `jwks.json` on the code server is not the current `/opt/kira/config/codeapi-jwks.json` – copy it again, run `setup-codeapi.sh` |
+| `setup.sh`: "CODE_INTERPRETER=true needs /dev/kvm" | no hardware virtualisation: in a VM enable nested virtualisation and CPU type `host`; in an LXC container it does not work – `CODE_INTERPRETER=false` |
+| code interpreter: build fails | `bash /opt/codeinterpreter/codeapi.sh build` shows the step; needs internet (GitHub, Docker Hub, package mirrors) and about 30 GB disk |
+| code interpreter: 401 in the self-test | key pair changed – run `setup.sh` again (it writes the public key to `codeinterpreter/env/codeapi.env`), then `bash /opt/codeinterpreter/codeapi.sh up -d` |
+| code interpreter: runs hang or fail with 5xx | `codeapi.sh logs --tail 80 service-worker sandbox-runner`; `codeapi-sandbox` unhealthy = `/dev/kvm` missing in the container or clock skew of the host (NTP) |
+| document appears only as a download, without preview | preview only for Word, Excel, PowerPoint and CSV up to a few MB; other files (PDF, images in files) are download-only |
 | SSO: "You must have … role" | claim `roles` (or `groups` with `AGENT_GROUPS=true`) missing in the ID token, or user in no permitted group |
 | SSO: `redirect_uri` invalid | add the redirect URI in the Keycloak client (see Installation) |
 | SSO: error 500 / timeout at login | LibreChat cannot reach Keycloak: `KEYCLOAK_INTERNAL_IP`, LAN block exception, firewall of the Keycloak server |
@@ -474,7 +461,7 @@ What the package does:
 
 - **Login only via Keycloak** (PKCE, required role/group); no local accounts, registration, password reset or shared
   links in LibreChat. Users cannot build agents (except builders, see "Own agents"), prompts, MCP servers or
-  presets; code execution and memories are off.
+  presets; memories are off; code runs only in the KVM sandbox of the code interpreter (if switched on).
 - **Networks:** databases have no internet; internal networks between the stacks; only Caddy publishes ports. The
   LAN block stops containers with internet from reaching the LAN and the host (exceptions: Keycloak :443 for LibreChat and Onyx only, DNS).
   With Keycloak in the LAN, LibreChat has no internet at all (only Keycloak and DNS).
@@ -486,7 +473,7 @@ What the package does:
   reaching private addresses (SSRF via redirects – CVE-2024-56800 is fixed in the Firecrawl API, its Playwright
   service is not patchable upstream). Firecrawl and SearXNG are only reachable from LibreChat; RabbitMQ runs without
   its management web interface.
-- **Agents:** no OpenAPI actions, no code execution, no own MCP servers – an agent cannot call arbitrary addresses
+- **Agents:** no OpenAPI actions, no own MCP servers – an agent cannot call arbitrary addresses
   from inside the stack; internal addresses for web search, endpoints and MCP are allow-listed (`allowedAddresses`).
 - **Secrets** only in `env/` (700/600), generated randomly; not in Portainer, not in the package. Slack and Uptime Kuma
   URLs are passed to curl via `-K`, not on the command line.
@@ -499,10 +486,10 @@ What the package does:
 
 Recommended outside the package (not checkable from here):
 
-- **Proxmox firewall** for the LXC: TCP 80/443 only from <PROXY-IP>, 22 and 9443 (Portainer = root on the host) only
-  from the admin network.
-- **Backups** in `/var/backups/kira` contain the secrets from `env/` and all chats unencrypted (folder 700) – enable
-  client-side encryption in Proxmox Backup Server.
+- **Firewall** of the server (or the hypervisor): TCP 80/443 only from <PROXY-IP>, 22 and 9443 (Portainer = root on
+  the host) only from the admin network.
+- **Backups** in `/var/backups/kira` contain the secrets from `env/` and all chats unencrypted (folder 700) – copy them
+  only encrypted to another system.
 - **Pin image versions:** `SEARXNG_TAG`, `FIRECRAWL_PLAYWRIGHT_TAG` and `FIRECRAWL_NUQ_TAG` are `latest`;
   if needed pin them by digest (`image@sha256:…`) after a successful start.
 - **Budget:** all KIRA users share one virtual key – one user can use up the budget for everyone; the message limit
@@ -529,7 +516,7 @@ Recommended outside the package (not checkable from here):
   `setup.sh`) therefore sets the cookie `lang=de-DE` as long as the browser has none – users can still switch under
   Settings → General → Language. The Bifrost web interface also follows the browser language (German included); if it
   shows English, choose "Deutsch" once on the login page or via the command palette (stored in the browser).
-- **Code execution** is off: the Code agent writes code but does not run it (LibreChat would need an external
-  service for that).
+- **Code execution** only with `CODE_INTERPRETER=true` (section "Code interpreter"); without it the Code agent writes
+  code but does not run it.
 - **Local LLM later:** add a provider (e.g. `vllm`/`ollama`) in `bifrost.json` and allow it for the key `vk-librechat`,
   then adjust `MODEL=` in an agent file.

@@ -1,9 +1,9 @@
 # KIRA – security review
 
-Review of the KIRA stack package (stacks `caddy`, `kira`, `bifrost`, `websearch`, `onyx`) as of **24.11.2026**,
-versions LibreChat v0.8.9, Bifrost v2.6, Firecrawl 2.11. Checked: code, scripts, generated configuration and
-the network rules (firewall rules tested with real traffic in network namespaces). Not checked: the running server,
-Keycloak, Proxmox, the upstream proxy – see "Outside the package".
+Review of the KIRA stack package (stacks `caddy`, `kira`, `bifrost`, `websearch`, `onyx`, `codeinterpreter`) as of
+**27.11.2026**, versions LibreChat v0.8.9, Bifrost v2.6, Firecrawl 2.11, code interpreter v1.9.1. Checked: code,
+scripts, generated configuration and the network rules (firewall rules tested with real traffic in network
+namespaces). Not checked: the running server, Keycloak, the hypervisor, the upstream proxy – see "Outside the package".
 
 Overview of networks and containers: [NETWORK.md](NETWORK.md). Groups and permissions: [README.md](README.md),
 section "Own agents".
@@ -64,12 +64,11 @@ accepted and listed below.
   by a local model, harmful requests refused; fail-closed when a checker is down. Bifrost then runs as an own build with
   the plugin and may reach exactly the vLLM servers in the LAN (ip:port). The checkers are language models – no
   guarantee, the data processing agreements stay necessary.
-- Optional office documents: the Office MCP server has no internet; files are handed out only with a signed,
-  time-limited link (S3 Signature V4, checked by kira-files) and deleted afterwards. Uploads to `/kira-files/` are only
-  accepted from the network `kira-office`. Who has a link can download the file until it expires.
-- Optional code interpreter: runs on an own server in a KVM sandbox (never on the KIRA server); LibreChat signs a token
-  per run (Ed25519, 5 minutes), the private key stays on the KIRA server; the firewall lets LibreChat reach exactly that
-  ip:port.
+- Optional code interpreter (`CODE_INTERPRETER`): code written by the model runs in a KVM microVM per run (own guest
+  kernel, NsJail and seccomp inside, signed execution manifests – the hardening of the project stays on). The stack has
+  no published ports, no internet and no LAN (`codeinterpreter_backend` is internal); the sandbox only reaches its egress
+  gateway. LibreChat signs a token per run (Ed25519, 5 minutes); the code interpreter only knows the public key.
+  Residual risk: a sandbox escape would land on the KIRA server – keep the host and `CODEAPI_VERSION` up to date.
 
 ### Networks and egress
 
@@ -153,10 +152,10 @@ Tested with real traffic (network namespaces, iptables as on the server):
 
 ## Outside the package (recommended, not checkable from here)
 
-- **Proxmox firewall** for the LXC: TCP 80/443 only from the upstream proxy (<PROXY-IP>); SSH and Portainer (9443 =
-  root on the host) only from the admin network.
-- **Backups** in `/var/backups/kira` contain the secrets and all chats unencrypted (folder 700) – enable client-side
-  encryption in Proxmox Backup Server.
+- **Firewall** of the server (or the hypervisor): TCP 80/443 only from the upstream proxy (<PROXY-IP>); SSH and
+  Portainer (9443 = root on the host) only from the admin network.
+- **Backups** in `/var/backups/kira` contain the secrets and all chats unencrypted (folder 700) – copy them only
+  encrypted to another system.
 - **Keycloak:** `/admin` from the KIRA host only for the service account; the client `kira` confidential with PKCE.
 - **Updates:** check LibreChat, Bifrost, Onyx and Firecrawl releases for security fixes regularly and raise the tags in
   `env/versions.env`.

@@ -11,7 +11,7 @@
 #
 # Networks:
 #   kira-outbound 172.31.62.0/24  LibreChat -> Keycloak (OIDC); with KEYCLOAK_INTERNAL_IP only Keycloak:443 + DNS, no internet
-#   kira-proxy / kira-llm / kira-search / kira-onyx   internal, created externally (setup.sh)
+#   kira-proxy / kira-llm / kira-search / kira-onyx / kira-code   internal, created externally (setup.sh)
 #   backend       internal        LibreChat <-> MongoDB, Meilisearch, RAG API; RAG API <-> pgvector
 # MongoDB, Meilisearch, pgvector and the RAG API have NO internet access.
 # ============================================================================
@@ -40,7 +40,7 @@ services:
       kira-llm: {}
       kira-search: {}
       kira-onyx: {}
-      kira-office: {}            # Office MCP server (optional office stack)
+      kira-code: {}              # code interpreter API (optional stack codeinterpreter)
     extra_hosts:
       # Keycloak directly in the LAN (setup.sh, env/compose.env) – without an entry a harmless placeholder
       - "${KEYCLOAK_HOST:-keycloak.invalid}:${KEYCLOAK_IP:-127.0.0.1}"
@@ -182,7 +182,7 @@ networks:
     external: true
   kira-onyx:
     external: true
-  kira-office:
+  kira-code:
     external: true
 
 volumes:

@@ -29,6 +29,5 @@ __pycache__/
 .DS_Store
 Thumbs.db
 vllm/*.env
-codeinterpreter/.env
-codeinterpreter/jwks.json
+# code interpreter sources (cloned by setup.sh)
 codeinterpreter/src/

@@ -4,7 +4,8 @@
 
 Personal AI assistant on its own server: [LibreChat](https://www.librechat.ai) as the chat interface, fixed agents per
 Keycloak group, [Bifrost](https://docs.getbifrost.ai) as the LLM gateway (Anthropic, OpenAI) with budgets, web search
-with SearXNG and Firecrawl, optional intranet search with Onyx – everything behind Caddy, login via Keycloak SSO.
+with SearXNG and Firecrawl, optional intranet search with Onyx and a code interpreter in a KVM sandbox – everything
+behind Caddy, login via Keycloak SSO.
 Optionally a privacy guard checks every request with own LLMs before it leaves the house.
 
 ## Features
@@ -13,8 +14,8 @@ Optionally a privacy guard checks every request with own LLMs before it leaves t
   the Keycloak groups; own agents with the models of the user's model groups
 - **LLM gateway** Bifrost: one virtual key per application, budgets per time window, cost logs, fallbacks
 - **Web search** without a search API (SearXNG, Firecrawl), **document search** (RAG), **intranet search** (Onyx, optional)
-- **Documents** (optional): Word, Excel, PowerPoint and e-mail drafts on request, with own templates, as download links
-- **Code interpreter** (optional, own server with KVM): analyses, charts, PDF/CSV files
+- **Code interpreter and documents** (optional, needs KVM on the server): Python in a sandbox for analyses and
+  charts; Word, Excel, PowerPoint and PDF files appear directly in the chat with preview and download
 - **Images and speech** (optional), own logo, favicon and agent icons
 - **Privacy guard** (optional, [details](kira/PRIVACY-GUARD.md)): personal or secret data is answered by a local
   model on own vLLM servers, harmful requests are refused, only clean requests go to Claude or OpenAI
@@ -33,8 +34,7 @@ The folders are extracted to `/opt` on the server, one Docker Compose stack each
 | [`bifrost/`](bifrost/) | LLM gateway with virtual keys and budgets; `plugins/privacy-guard/` for the optional privacy guard |
 | [`websearch/`](websearch/) | SearXNG and Firecrawl |
 | [`onyx/`](onyx/) | optional intranet search (SharePoint and more) |
-| [`office/`](office/) | optional office documents: Office MCP server and download links |
-| [`codeinterpreter/`](codeinterpreter/) | template for the optional code interpreter on an own server with KVM (not for the KIRA server) |
+| [`codeinterpreter/`](codeinterpreter/) | optional code interpreter (KVM sandbox, built from source by `setup.sh`) |
 | [`vllm/`](vllm/) | templates for the GPU servers of the optional privacy guard (not for the KIRA server) |
 
 ## Documentation
@@ -45,7 +45,7 @@ The folders are extracted to `/opt` on the server, one Docker Compose stack each
 - [kira/SECURITY.md](kira/SECURITY.md) – security review
 - [kira/PRIVACY-GUARD.md](kira/PRIVACY-GUARD.md) – optional privacy guard with own LLMs (vLLM)
 - [vllm/README.md](vllm/README.md) – setting up the vLLM servers for it
-- [codeinterpreter/README.md](codeinterpreter/README.md) – code interpreter on an own server with KVM
+- [codeinterpreter/README.md](codeinterpreter/README.md) – code interpreter and documents in the chat
 - [kira/agents/README.md](kira/agents/README.md) – defining agents
 
 ## Quick start

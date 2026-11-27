@@ -118,35 +118,40 @@ else
       POST http://bifrost:8080/v1/chat/completions "$VK" \
       '{"model":"anthropic/claude-haiku-5-5","max_tokens":5,"messages":[{"role":"user","content":"Just say: ok"}]}'
   fi
-  if [ "$(setup_get OFFICE_DOCUMENTS)" = "true" ]; then
-    echo "== Office documents =="
-    check_http "LibreChat -> Office MCP server" '^200 ' \
-      "docker compose -f /opt/office/docker-compose.yml ps; docker logs --tail 50 office-mcp" \
-      GET http://office-mcp:8958/healthz
-    # end to end: upload like the Office MCP server does (via Caddy, signed for the KIRA domain), then download
-    res=$(docker exec -i office-mcp python - 2>&1 <<'PY'
-import os, urllib.request, boto3
-from botocore.config import Config
-s3 = boto3.client("s3", endpoint_url=os.environ["MINIO_ENDPOINT"], aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
-                  aws_secret_access_key=os.environ["MINIO_SECRET_KEY"], region_name="us-east-1",
-                  config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
-s3.put_object(Bucket="kira-files", Key="selbsttest.txt", Body=b"KIRA", ContentType="text/plain")
-url = s3.generate_presigned_url("get_object", Params={"Bucket": "kira-files", "Key": "selbsttest.txt"}, ExpiresIn=60)
-print("OK" if urllib.request.urlopen(url, timeout=20).read() == b"KIRA" else "content differs")
-PY
-)
-    if [ "${res##*$'\n'}" = OK ]; then ok "download link: upload via Caddy and signed download work"
-    else bad "download link: ${res:0:200}"
-      hint "Caddy route sites/kira.d/office.caddy, docker logs --tail 30 office-files; certificate of the KIRA domain valid?"; fi
-  fi
   if [ "$(setup_get CODE_INTERPRETER)" = "true" ]; then
     echo "== Code interpreter =="
-    base=$(env_get "$LC_ENV" LIBRECHAT_CODE_BASEURL)
-    check_http "LibreChat -> code server ($base)" '^200 ' \
-      "code server running (codeinterpreter/README.md)? Firewall: LIBRECHAT_EXTRA_DST in config/egress.env" \
-      GET "$base/health"
-    if [ -s /opt/kira/config/codeapi-jwks.json ]; then ok "public key for the code server: /opt/kira/config/codeapi-jwks.json"
-    else bad "public key /opt/kira/config/codeapi-jwks.json missing"; hint "bash /opt/kira/setup.sh"; fi
+    for c in codeapi codeapi-worker codeapi-sandbox codeapi-egress codeapi-files codeapi-toolcall codeapi-redis codeapi-minio; do
+      st=$(docker inspect -f '{{.State.Status}}{{if .State.Health}}/{{.State.Health.Status}}{{end}}' "$c" 2>/dev/null || echo missing)
+      case $st in running|running/healthy) ;; *) bad "container $c: $st"
+        hint "bash /opt/codeinterpreter/codeapi.sh ps; bash /opt/codeinterpreter/codeapi.sh logs --tail 50 ${c#codeapi-}" ;; esac
+    done
+    check_http "LibreChat -> code interpreter API" '^200 ' \
+      "bash /opt/codeinterpreter/codeapi.sh ps – network kira-code, container codeapi" GET http://codeapi:3112/v1/health
+    # end to end like LibreChat: signed token (Ed25519), Python in the KVM sandbox, a Word file in /mnt/data
+    res=$(docker exec -i librechat node - 2>&1 <<'JS'
+const c = require('crypto');
+const e = process.env, now = Math.floor(Date.now() / 1000);
+const b64 = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
+const sub = 'kira-self-test', tenant = e.CODEAPI_JWT_SINGLE_TENANT_ID || 'kira', role = 'USER', ps = 'librechat_jwt';
+const hash = c.createHash('sha256').update(JSON.stringify({ chc_user_id: '', org_id: '', principal_source: ps, role,
+  service_id: '', sub, tenant_id: tenant })).digest('hex');
+const input = b64({ alg: 'EdDSA', typ: 'JWT', kid: e.CODEAPI_JWT_KID }) + '.' + b64({ iss: e.CODEAPI_JWT_ISSUER,
+  aud: e.CODEAPI_JWT_AUDIENCE, sub, iat: now, nbf: now, exp: now + 60, jti: c.randomUUID(), tenant_id: tenant, role,
+  principal_source: ps, auth_context_hash: hash });
+const key = c.createPrivateKey(Buffer.from(e.CODEAPI_JWT_PRIVATE_KEY_BASE64, 'base64').toString());
+const jwt = input + '.' + c.sign(null, Buffer.from(input), key).toString('base64url');
+const code = "from docx import Document\nd = Document(); d.add_heading('KIRA Selbsttest', 1)\n" +
+  "d.save('/mnt/data/selbsttest.docx'); print('KIRA-' + 'OK')";
+fetch(e.LIBRECHAT_CODE_BASEURL + '/exec', { method: 'POST', signal: AbortSignal.timeout(120000),
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + jwt },
+  body: JSON.stringify({ lang: 'py', code }) })
+  .then(async (r) => console.log(r.status, (await r.text()).replace(/\s+/g, ' ').slice(0, 2000)))
+  .catch((err) => console.log('ERR', err.message));
+JS
+)
+    if [[ $res == "200 "* && $res == *KIRA-OK* && $res == *selbsttest.docx* ]]; then ok "code run in the sandbox: Python and a Word file work"
+    else bad "code run in the sandbox: ${res:0:300}"
+      hint "401: key pair (setup.sh) – 5xx: bash /opt/codeinterpreter/codeapi.sh logs --tail 80 service-worker sandbox-runner (/dev/kvm?)"; fi
   fi
   if [ "$(setup_get PRIVACY_GUARD)" = "true" ]; then
     echo "== Privacy guard =="

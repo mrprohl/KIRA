@@ -7,7 +7,6 @@
 # Networks: default (kira-edge)  internet (certificates, ports 80/443), fixed subnet 172.31.60.0/24 – the LAN block
 #                                (/opt/kira/scripts/egress-firewall.sh) blocks LAN and host from it
 #           kira-proxy           internal, 172.30.20.0/24, Caddy fixed at .2 – the only way to LibreChat, Bifrost, Onyx
-#           kira-office          internal, 172.30.28.0/24, Caddy fixed at .2 – download links of the office documents
 # Reload after changes:  docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 # ============================================================================
 
@@ -30,7 +29,6 @@ services:
     networks:
       default: {}
       kira-proxy: { ipv4_address: 172.30.20.2 }
-      kira-office: { ipv4_address: 172.30.28.2 }
     ports:
       - "80:80"
       - "443:443"
@@ -49,8 +47,6 @@ networks:
     ipam: { config: [{ subnet: 172.31.60.0/24 }] }   # source of the LAN block – do not change
   kira-proxy:
     external: true            # 172.30.20.0/24, created by /opt/kira/setup.sh
-  kira-office:
-    external: true            # 172.30.28.0/24, created by /opt/kira/setup.sh (office documents, optional)
 
 volumes:
   data:

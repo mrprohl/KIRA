@@ -2,9 +2,11 @@
 # ============================================================================
 # backup.sh – daily via cron (/etc/cron.d/kira), can also be run by hand:
 #   Bifrost DB, LibreChat MongoDB, RAG vector database, Onyx DB (if active), LibreChat uploads/images and
-#   /opt/{caddy,bifrost,kira,websearch,onyx,office} (incl. env/ – secrets!) to $BACKUP_DIR/<date_time>/,
-#   kept for $BACKUP_KEEP_DAYS days. Result -> Uptime Kuma (push monitor "KIRA Backup"), errors also -> Slack.
-# Not backed up (rebuilt automatically): Meilisearch index, Onyx OpenSearch index, Firecrawl queues.
+#   /opt/{caddy,bifrost,kira,websearch,onyx,codeinterpreter} (incl. env/ – secrets!; without the code interpreter
+#   sources) to $BACKUP_DIR/<date_time>/, kept for $BACKUP_KEEP_DAYS days.
+#   Result -> Uptime Kuma (push monitor "KIRA Backup"), errors also -> Slack.
+# Not backed up (rebuilt automatically): Meilisearch index, Onyx OpenSearch index, Firecrawl queues, code interpreter
+# sources and its temporary files (results are stored in LibreChat).
 # Restore: README, section "Operations".
 # ============================================================================
 set -euo pipefail
@@ -54,8 +56,8 @@ fi
 
 # --- stack folders incl. secrets ---
 dirs=()
-for d in caddy bifrost kira websearch onyx office; do [ -d "/opt/$d" ] && dirs+=("$d"); done
-tar czf "$target/opt-stacks.tgz" -C /opt "${dirs[@]}"
+for d in caddy bifrost kira websearch onyx codeinterpreter; do [ -d "/opt/$d" ] && dirs+=("$d"); done
+tar czf "$target/opt-stacks.tgz" --exclude=codeinterpreter/src -C /opt "${dirs[@]}"
 
 trap - ERR
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +"$BACKUP_KEEP_DAYS" -exec rm -rf {} +

@@ -2,6 +2,7 @@
 # ============================================================================
 # KIRA – central setup for all stacks under /opt:
 #   caddy (reverse proxy) · bifrost (LLM gateway) · kira (LibreChat) · websearch (SearXNG, Firecrawl) · onyx (optional)
+#   · codeinterpreter (optional, needs /dev/kvm)
 #
 #   Usage:  bash /opt/kira/setup.sh
 #
@@ -18,8 +19,8 @@ CADDY=/opt/caddy
 BIFROST=/opt/bifrost
 WEBSEARCH=/opt/websearch
 ONYX=/opt/onyx
-OFFICE=/opt/office
-STACK_DIRS=("$CADDY" "$BIFROST" "$KIRA" "$WEBSEARCH" "$ONYX" "$OFFICE")
+CODEI=/opt/codeinterpreter
+STACK_DIRS=("$CADDY" "$BIFROST" "$KIRA" "$WEBSEARCH" "$ONYX" "$CODEI")
 SETUP_ENV=$KIRA/env/setup.env
 EMBEDDING_MODEL=text-embedding-3-small      # OpenAI embedding model for document search (via Bifrost)
 
@@ -242,22 +243,26 @@ fi
 info "Docker $(docker version -f '{{.Server.Version}}'), Compose $compose_version – ok."
 
 # Files from Windows: strip line endings (CRLF), set permissions for Linux/Docker
+# (not in codeinterpreter/src – the cloned sources keep their own line endings and permissions)
 for d in "${STACK_DIRS[@]}"; do
-  find "$d" -type f \( -name '*.sh' -o -name '*.py' -o -name '*.js' -o -name '*.yml' -o -name '*.yaml' -o -name '*.env' \
+  find "$d" -path "$CODEI/src" -prune -o -type f \( -name '*.sh' -o -name '*.py' -o -name '*.js' -o -name '*.yml' -o -name '*.yaml' -o -name '*.env' \
        -o -name '*.example' -o -name '*.md' -o -name '*.json' -o -name '*.caddy' -o -name '*.off' -o -name 'Caddyfile' \
        -o -name '*.template' -o -name '*.conf' \) -exec sed -i 's/\r$//' {} +
   # skip env/ (secrets) – stays 700/600
-  find "$d" -path "$d/env" -prune -o -type d -exec chmod 755 {} +
-  find "$d" -path "$d/env" -prune -o -type f -exec chmod 644 {} +
+  find "$d" \( -path "$d/env" -o -path "$CODEI/src" \) -prune -o -type d -exec chmod 755 {} +
+  find "$d" \( -path "$d/env" -o -path "$CODEI/src" \) -prune -o -type f -exec chmod 644 {} +
   if [ -d "$d/env" ]; then chmod 700 "$d/env"; find "$d/env" -type f -exec chmod 600 {} +; fi
 done
-chmod 755 "$KIRA/setup.sh" "$KIRA"/scripts/*.sh "$KIRA"/scripts/*.py "$BIFROST"/db/init/*.sh "$ONYX"/nginx/run-nginx.sh
+chmod 755 "$KIRA/setup.sh" "$KIRA"/scripts/*.sh "$KIRA"/scripts/*.py "$BIFROST"/db/init/*.sh "$ONYX"/nginx/run-nginx.sh \
+  "$CODEI/codeapi.sh"
 info "Line endings and file permissions normalised."
 
 umask 077
 for d in "${STACK_DIRS[@]}"; do mkdir -p "$d/env"; chmod 700 "$d/env"; done
 touch "$SETUP_ENV"; chmod 600 "$SETUP_ENV"
 [ -s "$SETUP_ENV" ] || printf '# KIRA – switches and answers from setup.sh. To change: edit the value, then run bash %s/setup.sh\n' "$KIRA" > "$SETUP_ENV"
+# switches of an earlier test version (office download links, external code server) – replaced by the local code interpreter
+sed -i '/^OFFICE_DOCUMENTS=/d; /^OFFICE_LINK_HOURS=/d; /^CODE_API_URL=/d' "$SETUP_ENV"
 
 # ---------------------------------------------------------------- 1. Switches and basic settings
 section "Basic settings (stored in env/setup.env)"
@@ -277,13 +282,12 @@ ensure_yesno IMAGE_GENERATION "Enable image generation (image agent, agents/40-i
 if is_true IMAGE_GENERATION; then
   ensure_text IMAGE_MODEL "OpenAI image model in Bifrost, without \"openai/\" (e.g. gpt-image-2)" "$MODEL_RE"
 fi
-ensure_yesno OFFICE_DOCUMENTS "Office documents: KIRA creates Word, Excel and PowerPoint files on request (download links)?"
-if is_true OFFICE_DOCUMENTS; then
-  ensure_optional OFFICE_LINK_HOURS "How long are download links valid, in hours (1 to 168; empty = 24)?" '^([1-9]|[1-9][0-9]|1[0-5][0-9]|16[0-8])$' "A number from 1 to 168."
+if ! setup_has CODE_INTERPRETER && [ ! -c /dev/kvm ]; then
+  info "Note: this server has no /dev/kvm (hardware virtualisation) – the code interpreter cannot run here (answer no)."
 fi
-ensure_yesno CODE_INTERPRETER "Code interpreter: KIRA runs code on an own server with KVM (analyses, charts, files; codeinterpreter/README.md)?"
+ensure_yesno CODE_INTERPRETER "Code interpreter: KIRA runs Python in a sandbox – analyses, charts and documents (Word, Excel, PowerPoint, PDF) directly in the chat; needs /dev/kvm (codeinterpreter/README.md)?"
 if is_true CODE_INTERPRETER; then
-  ensure_text CODE_API_URL "Address of the code interpreter (e.g. http://10.0.0.60:3112 or https://code.example.com)" "$VLLM_URL_RE" "Form http(s)://host:port."
+  ensure_number CODE_PARALLEL "How many code runs at the same time? (1 to 16; empty = 4, each needs up to 2 GB RAM)" 1 16
 fi
 ensure_yesno SPEECH "Enable speech input and speech output?"
 if is_true SPEECH; then
@@ -361,6 +365,14 @@ if [ -n "$(setup_get BIFROST_UI_DOMAIN)" ]; then
   ensure_text BIFROST_UI_ALLOWED_IPS "Allowed IPs for the Bifrost web interface (space-separated)" "$IPLIST_RE"
 fi
 setup_has AGENT_BUILDER || setup_set AGENT_BUILDER false
+
+if is_true CODE_INTERPRETER; then
+  [ -c /dev/kvm ] || die "CODE_INTERPRETER=true needs /dev/kvm – this server has no hardware virtualisation (in a VM: enable
+  nested virtualisation, CPU type \"host\"). Or set CODE_INTERPRETER=false in $SETUP_ENV and run setup.sh again."
+  command -v git >/dev/null || die "program 'git' is missing (apt install git) – needed for the code interpreter."
+  printf '%s\n%s\n' "2.24.0" "$compose_version" | sort -V -C \
+    || die "Docker Compose $compose_version is too old for the code interpreter – at least 2.24 is required."
+fi
 
 DOMAIN=$(setup_get KIRA_DOMAIN)
 UPSTREAM_IP=$(setup_get UPSTREAM_PROXY_IP)
@@ -829,56 +841,37 @@ compose_env() {   # compose_env <file> – Keycloak address for extra_hosts (emp
 }
 compose_env "$KIRA/env/compose.env"
 
-# ---------------------------------------------------------------- 4b. Office documents (optional)
-section "Office documents"
-if is_true OFFICE_DOCUMENTS; then
-  mkdir -p "$OFFICE/env" "$OFFICE/templates" "$OFFICE/config"
-  [ -f "$OFFICE/files/kira_files.py" ] || die "$OFFICE/files/kira_files.py is missing – copy the folder office from the package."
-  link_h=$(setup_get OFFICE_LINK_HOURS); link_h=${link_h:-24}
-  if [ ! -f "$OFFICE/env/office-files.env" ]; then
-    S3_AK=kira$(random_hex 8); S3_SK=$(random_hex 32)
-    umask 077
-    cat > "$OFFICE/env/office-files.env" <<EOF
-# kira-files (download links) – generated by setup.sh. The same key pair is in office-mcp.env.
-S3_ACCESS_KEY=$S3_AK
-S3_SECRET_KEY=$S3_SK
-FILE_TTL_HOURS=$link_h
-EOF
-    cat > "$OFFICE/env/office-mcp.env" <<EOF
-# Office MCP server – generated by setup.sh. API_KEY is also in /opt/kira/env/librechat.env (OFFICE_MCP_API_KEY).
-API_KEY=$(random_hex 32)
-MINIO_ENDPOINT=https://$DOMAIN
-MINIO_ACCESS_KEY=$S3_AK
-MINIO_SECRET_KEY=$S3_SK
-SIGNED_URL_EXPIRES_IN=$((link_h * 3600))
-EOF
-    umask 022
-    unset S3_AK S3_SK
-    info "office/env/office-mcp.env and office-files.env created."
-  fi
-  # derived on every run: domain and link lifetime
-  env_set "$OFFICE/env/office-mcp.env" MINIO_ENDPOINT "https://$DOMAIN"
-  env_set "$OFFICE/env/office-mcp.env" SIGNED_URL_EXPIRES_IN "$((link_h * 3600))"
-  env_set "$OFFICE/env/office-files.env" FILE_TTL_HOURS "$link_h"
-  [ -f "$OFFICE/env/versions.env" ] && env_set "$OFFICE/env/versions.env" KIRA_DOMAIN "$DOMAIN"
-  env_set "$LC_ENV" OFFICE_MCP_API_KEY "$(env_get "$OFFICE/env/office-mcp.env" API_KEY)"
-else
-  info "Office documents are off (OFFICE_DOCUMENTS=false) – stack office is not set up."
-  [ ! -f "$OFFICE/env/versions.env" ] || env_set "$OFFICE/env/versions.env" KIRA_DOMAIN "$DOMAIN"
-fi
-
-# ---------------------------------------------------------------- 4c. Code interpreter (optional, own server)
+# ---------------------------------------------------------------- 4b. Code interpreter (optional, stack codeinterpreter)
 section "Code interpreter"
 CODE_KEYS=(LIBRECHAT_CODE_BASEURL CODEAPI_AUTH_PROVIDER CODEAPI_JWT_ALGORITHM CODEAPI_JWT_KID CODEAPI_JWT_ISSUER
            CODEAPI_JWT_AUDIENCE CODEAPI_JWT_TTL_SECONDS CODEAPI_JWT_SINGLE_TENANT_ID)
+sed -i '/^OFFICE_MCP_API_KEY=/d' "$LC_ENV"   # earlier test version (office download links), replaced by the code interpreter
+CODE_VERSION=""
 if is_true CODE_INTERPRETER; then
-  # LibreChat signs a short token (Ed25519) per request; the code server knows only the public key (JWKS)
+  CODE_ENV=$CODEI/env/codeapi.env
+  CODE_VERSION=$(env_get "$CODEI/env/versions.env" CODEAPI_VERSION)
+  [[ $CODE_VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || die "CODEAPI_VERSION=$CODE_VERSION in $CODEI/env/versions.env – a release tag like v1.9.1."
+  # sources of the pinned release (built into images when starting)
+  if [ ! -d "$CODEI/src/.git" ]; then
+    info "Cloning ClickHouse/code-interpreter $CODE_VERSION …"
+    rm -rf "$CODEI/src"
+    # umask 022: the images copy the files with their permissions – services that run as a user must read them
+    (umask 022; git clone -q --depth 1 --branch "$CODE_VERSION" -c advice.detachedHead=false \
+      https://github.com/ClickHouse/code-interpreter "$CODEI/src") \
+      || die "code interpreter $CODE_VERSION could not be cloned (GitHub reachable? tag correct?)."
+  elif [ "$(git -C "$CODEI/src" describe --tags --exact-match 2>/dev/null)" != "$CODE_VERSION" ]; then
+    info "Code interpreter: switching sources to $CODE_VERSION …"
+    (umask 022; git -C "$CODEI/src" fetch -q --depth 1 origin tag "$CODE_VERSION" \
+      && git -C "$CODEI/src" -c advice.detachedHead=false checkout -q -f "$CODE_VERSION") \
+      || die "code interpreter $CODE_VERSION could not be fetched (GitHub reachable? tag correct?)."
+  fi
+  # LibreChat signs a short token (Ed25519, 5 minutes) per request; the code interpreter knows only the public key
   if [ -z "$(env_get "$LC_ENV" CODEAPI_JWT_PRIVATE_KEY_BASE64)" ]; then
     env_set "$LC_ENV" CODEAPI_JWT_PRIVATE_KEY_BASE64 "$(openssl genpkey -algorithm ed25519 2>/dev/null | base64 -w0)"
     info "Key pair for the code interpreter generated (private key in env/librechat.env)."
   fi
-  code_url=$(setup_get CODE_API_URL); code_url=${code_url%/}
-  env_set "$LC_ENV" LIBRECHAT_CODE_BASEURL "$code_url/v1"
+  env_set "$LC_ENV" LIBRECHAT_CODE_BASEURL "http://codeapi:3112/v1"
   env_set "$LC_ENV" CODEAPI_AUTH_PROVIDER librechat-jwt
   env_set "$LC_ENV" CODEAPI_JWT_ALGORITHM EdDSA
   env_set "$LC_ENV" CODEAPI_JWT_KID kira-1
@@ -886,14 +879,38 @@ if is_true CODE_INTERPRETER; then
   env_set "$LC_ENV" CODEAPI_JWT_AUDIENCE codeapi
   env_set "$LC_ENV" CODEAPI_JWT_TTL_SECONDS 300
   env_set "$LC_ENV" CODEAPI_JWT_SINGLE_TENANT_ID kira
-  # public key for the code server (not secret) – copy it there (codeinterpreter/README.md)
-  JWKS=$KIRA/config/codeapi-jwks.json
-  (umask 022; mkdir -p "$KIRA/config")
+  # secrets of the code interpreter – once
+  if [ ! -f "$CODE_ENV" ]; then
+    m_priv=$(openssl genpkey -algorithm ed25519 -outform DER 2>/dev/null | base64 -w0)
+    m_pub=$(printf '%s' "$m_priv" | base64 -d | openssl pkey -inform DER -pubout -outform DER 2>/dev/null | base64 -w0)
+    [ -n "$m_pub" ] || die "openssl cannot create Ed25519 keys – needed for the code interpreter."
+    {
+      echo "# code interpreter – generated by setup.sh (secrets, never overwritten; the last lines are derived on every run)"
+      echo "REDIS_PASSWORD=$(random_hex 24)"
+      echo "MINIO_ROOT_USER=codeapi$(random_hex 4)"
+      echo "MINIO_ROOT_PASSWORD=$(random_hex 24)"
+      echo "CODEAPI_INTERNAL_SERVICE_TOKEN=$(random_hex 32)"
+      echo "CODEAPI_EGRESS_GRANT_SECRET=$(random_hex 32)"
+      echo "CODEAPI_EXECUTION_MANIFEST_PRIVATE_KEY=$m_priv"
+      echo "SANDBOX_EXECUTION_MANIFEST_PUBLIC_KEY=$m_pub"
+    } > "$CODE_ENV"
+    unset m_priv m_pub
+    info "codeinterpreter/env/codeapi.env created."
+  fi
+  # derived on every run: public key of LibreChat (JWKS, JSON in single quotes) and parallel runs
   x=$(env_get "$LC_ENV" CODEAPI_JWT_PRIVATE_KEY_BASE64 | base64 -d | openssl pkey -pubout -outform DER 2>/dev/null \
       | tail -c 32 | base64 -w0 | tr '+/' '-_' | tr -d '=')
   [ ${#x} -eq 43 ] || die "public key of the code interpreter could not be derived (openssl with Ed25519 needed)."
-  (umask 022; printf '{"keys":[{"kty":"OKP","crv":"Ed25519","x":"%s","kid":"kira-1","alg":"EdDSA","use":"sig"}]}\n' "$x" > "$JWKS")
-  info "Public key for the code server: $JWKS (CODEAPI_JWT_JWKS_JSON there)."
+  sed -i '/^CODEAPI_JWT_JWKS_JSON=/d; /^CODE_PARALLEL=/d' "$CODE_ENV"
+  printf '%s\n' "CODEAPI_JWT_JWKS_JSON='{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"$x\",\"kid\":\"kira-1\",\"alg\":\"EdDSA\",\"use\":\"sig\"}]}'" >> "$CODE_ENV"
+  n=$(setup_get CODE_PARALLEL); echo "CODE_PARALLEL=${n:-4}" >> "$CODE_ENV"
+  # RAM: KIRA about 8 GB (+16 GB with Onyx), the code interpreter 2 GB for its services + 2 GB per parallel run
+  need=$(( 8 + 2 + 2 * ${n:-4} )); is_true ONYX_ENABLED && need=$((need + 16))
+  mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+  [ "${mem_kb:-0}" -ge $((need * 1000000)) ] \
+    || warn "The host has $((mem_kb / 1024 / 1024)) GB of RAM; about $need GB are recommended with the code interpreter (fewer parallel runs: CODE_PARALLEL)."
+  rm -f "$KIRA/config/codeapi-jwks.json"   # earlier test version: public key for an external code server
+  info "Code interpreter $CODE_VERSION prepared (LibreChat -> http://codeapi:3112, network kira-code)."
 else
   info "Code interpreter is off (CODE_INTERPRETER=false)."
   for k in "${CODE_KEYS[@]}"; do sed -i "/^$k=/d" "$LC_ENV"; done   # the key pair stays for a later switch-on
@@ -1085,23 +1102,7 @@ if ! grep -q 'import /etc/caddy/sites/kira.d/' "$SITES/kira.caddy"; then
     warn "sites/kira.caddy: line \"reverse_proxy librechat:3080\" not found – add \"import /etc/caddy/sites/kira.d/*.caddy\" in front of the reverse_proxy yourself."
   fi
 fi
-if is_true OFFICE_DOCUMENTS; then
-  cat > "$SITES/kira.d/office.caddy" <<'EOF'
-# Office documents: signed download links (/kira-files/…) – generated by setup.sh.
-# Downloading needs the signature in the link; uploading only from the Office MCP server (network kira-office).
-@kira_files path /kira-files/*
-handle @kira_files {
-	@kira_files_write {
-		not method GET HEAD
-		not remote_ip 172.30.28.0/24
-	}
-	respond @kira_files_write 403
-	reverse_proxy office-files:8080
-}
-EOF
-else
-  rm -f "$SITES/kira.d/office.caddy"
-fi
+rm -f "$SITES/kira.d/office.caddy"   # earlier test version (office download links)
 if is_true ONYX_ENABLED; then
   OD=$(setup_get ONYX_DOMAIN)
   if [ -f "$SITES/onyx.caddy.off" ] && [ ! -f "$SITES/onyx.caddy" ]; then mv "$SITES/onyx.caddy.off" "$SITES/onyx.caddy"; fi
@@ -1213,7 +1214,7 @@ create_net kira-proxy  172.30.20.0/24 172.30.20.128/25   # Caddy has the fixed a
 create_net kira-llm    172.30.21.0/24
 create_net kira-search 172.30.22.0/24
 create_net kira-onyx   172.30.23.0/24
-create_net kira-office 172.30.28.0/24 172.30.28.128/25   # Caddy has the fixed address .2
+create_net kira-code   172.30.29.0/24                     # LibreChat -> code interpreter API
 
 # ---------------------------------------------------------------- 9. LAN block (host firewall)
 section "LAN block"
@@ -1244,18 +1245,6 @@ if is_true PRIVACY_GUARD; then
   # shellcheck disable=SC2086  # word splitting intended
   GUARD_DST=$(printf '%s\n' $GUARD_DST | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ $//')
 fi
-# Code interpreter: LibreChat may reach the code server (ip:port) – in the LAN despite the block, and with
-# Keycloak in the LAN (LibreChat without internet) also on the internet
-CODE_DST=""
-if is_true CODE_INTERPRETER; then
-  url=$(setup_get CODE_API_URL); hp=${url#*://}; hp=${hp%%/*}; host=${hp%%:*}; port=${hp##*:}
-  [ "$port" = "$hp" ] && { case "$url" in https:*) port=443 ;; *) port=80 ;; esac; }
-  if [[ $host =~ $IPV4_RE ]]; then ips=$host
-  else ips=$( { getent ahostsv4 "$host" 2>/dev/null || true; } | awk '{print $1}' | sort -u | tr '\n' ' '); fi
-  [ -n "$ips" ] || warn "Code interpreter: $host cannot be resolved – no firewall exception."
-  for ip in $ips; do CODE_DST="$CODE_DST $ip:$port"; done
-  CODE_DST=${CODE_DST# }
-fi
 umask 022
 cat > "$EGRESS_ENV" <<EOF
 # LAN block – generated by setup.sh on every run (do not edit by hand)
@@ -1267,8 +1256,6 @@ ALLOW_DNS="$DNS"
 LIBRECHAT_ONLY_DST="$LC_ONLY"
 # Privacy guard: vLLM servers in the LAN that Bifrost (bifrost-outbound) may reach, as ip:port (empty = none)
 BIFROST_LAN_DST="$GUARD_DST"
-# Code interpreter: code server (ip:port) that LibreChat (kira-outbound) may reach (empty = none)
-LIBRECHAT_EXTRA_DST="$CODE_DST"
 EOF
 umask 077
 UNIT=/etc/systemd/system/kira-egress-firewall.service
@@ -1426,7 +1413,7 @@ fi
 # ---------------------------------------------------------------- 12. Start
 section "Start"
 STACKS=(bifrost websearch)
-is_true OFFICE_DOCUMENTS && STACKS+=(office)
+is_true CODE_INTERPRETER && STACKS+=(codeinterpreter)
 STACKS+=(kira)
 is_true ONYX_ENABLED && STACKS+=(onyx)
 STACKS+=(caddy)
@@ -1445,6 +1432,23 @@ info "Order: ${STACKS[*]}. Alternatively paste /opt/<stack>/docker-compose.yml i
 ask_yesno START "Pull and start (or update) the stacks now with docker compose?"
 if [ "$START" = true ]; then
   for s in "${STACKS[@]}"; do
+    if [ "$s" = codeinterpreter ]; then
+      # built from source (no public images): only when the version changed or an image is missing
+      CA=$CODEI/codeapi.sh
+      stamp=$CODEI/env/built.version
+      if [ "$(cat "$stamp" 2>/dev/null)" != "$CODE_VERSION" ] \
+         || ! docker image inspect codeinterpreter-api codeinterpreter-sandbox-runner >/dev/null 2>&1; then
+        info "--- codeinterpreter: building $CODE_VERSION (first build 30 minutes or more – it compiles the sandbox runtimes)"
+        bash "$CA" build || die "build of the code interpreter failed – details above (codeinterpreter/README.md)."
+        echo "$CODE_VERSION" > "$stamp"
+      fi
+      info "--- codeinterpreter: pulling images"
+      bash "$CA" pull redis minio \
+        || die "images of the code interpreter could not be pulled (REDIS_IMAGE/MINIO_IMAGE in $CODEI/env/versions.env)."
+      info "--- codeinterpreter: starting"
+      bash "$CA" up -d --no-build --remove-orphans || die "starting the code interpreter failed – bash $CA logs"
+      continue
+    fi
     f=/opt/$s/docker-compose.yml
     info "--- $s: pulling images"
     if [ "$s" = bifrost ] && is_true PRIVACY_GUARD; then
@@ -1469,8 +1473,12 @@ if [ "$START" = true ]; then
   if ! is_true ONYX_ENABLED && running onyx-api; then
     info "Note: Onyx is off but still running – stop it with: docker compose -f /opt/onyx/docker-compose.yml down"
   fi
-  if ! is_true OFFICE_DOCUMENTS && running office-mcp; then
-    info "Note: office documents are off but still running – stop with: docker compose -f /opt/office/docker-compose.yml down"
+  if ! is_true CODE_INTERPRETER && running codeapi; then
+    info "Note: the code interpreter is off but still running – stop it with: bash $CODEI/codeapi.sh down"
+  fi
+  if running office-mcp || running office-files; then
+    info "Note: the office stack (download links) was replaced by the code interpreter – remove it with:"
+    info "  docker compose -f /opt/office/docker-compose.yml down -v && docker network rm kira-office && rm -rf /opt/office"
   fi
   if groups_pending && running librechat; then
     bash "$KIRA/scripts/agent-groups.sh" --no-regenerate || warn "Agents per group not applied – run $KIRA/scripts/agent-groups.sh again."
@@ -1496,4 +1504,5 @@ info "3. Log in at https://$DOMAIN – users with the Keycloak role admin become
 is_true AGENT_GROUPS && info "   Agents per group: in Keycloak add the mapper \"groups\" (full group path off) and set the default group (e.g. kira-users-default) under Realm settings → User registration → Default groups; admins = members of the ADMIN_GROUP (e.g. kira-admins) – no group, no login (README)."
 is_true IMAGE_GENERATION && info "4. Create the image agent once: README, section \"Image agent\"."
 is_true ONYX_ENABLED && info "5. Set up Onyx (admin account, LLM via Bifrost, API key, SharePoint): README, section \"Onyx\"."
+is_true CODE_INTERPRETER && info "6. Code interpreter: in KIRA \"Erstelle eine Word-Datei mit …\" – the file appears in the chat (codeinterpreter/README.md)."
 exit 0

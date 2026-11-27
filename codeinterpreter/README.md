@@ -1,50 +1,58 @@
-# Code interpreter for KIRA (own server with KVM)
+# Code interpreter (stack `/opt/codeinterpreter`, optional)
 
-With the code interpreter KIRA writes small programs and runs them in a sandbox: analyses of uploaded files, exact
-calculations, charts, and files the Office tools cannot make (PDF, CSV …). The files appear in the chat for download.
+With the code interpreter KIRA writes small Python programs and runs them in a sandbox: calculations, analyses of
+uploaded files, charts – and documents. Word, Excel, PowerPoint, PDF or CSV files that the program saves to
+`/mnt/data` appear **directly in the chat**: Word, Excel and PowerPoint with a preview in the side panel, every file
+with a download button. They are stored in LibreChat like uploads.
 
-It runs **on an own server, not on the KIRA server**: the sandbox starts a small virtual machine per run and needs
-hardware virtualisation (`/dev/kvm`). A VM on Proxmox that itself runs in a cloud VM usually has none. The software is
-the open-source [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter) (Apache 2.0); this
-folder only adds KIRA's settings.
+The software is the open-source [ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter)
+(Apache 2.0). It has no public images: `setup.sh` clones the pinned release into `src/` and builds it. This folder only
+adds KIRA's settings.
 
 ```
-KIRA server                                   code server (KVM)
-LibreChat ──── HTTP(S), signed token ────►    API :3112 ─► worker ─► KVM sandbox (no network, own kernel)
-           (Ed25519, valid 5 minutes)                    └► Redis, MinIO, file server (internal only)
+LibreChat ── network kira-code ──► codeapi :3112 ─► worker ─► sandbox: one small VM per run (own kernel, no network)
+  signed token per run                              │             └► egress gateway ─► file server ─► MinIO
+  (Ed25519, valid 5 minutes)                        └► Redis           (all in codeinterpreter_backend, internal)
 ```
 
-## Setting up
+## Requirements
 
-Requirements: Linux with `/dev/kvm` (`ls -l /dev/kvm`, CPU flags `grep -c -E 'vmx|svm' /proc/cpuinfo` > 0), Docker,
-Docker Compose ≥ 2.24, git, openssl, python3. About 8 GB RAM and 30 GB disk.
+- **Hardware virtualisation on the KIRA server:** `/dev/kvm` must exist – check with `ls -l /dev/kvm` and
+  `grep -c -E 'vmx|svm' /proc/cpuinfo` (> 0). Bare metal, or a VM with nested virtualisation (CPU type `host`).
+  An LXC container does not work.
+- Docker Compose ≥ 2.24, `git`; about 2 GB RAM per parallel run (`CODE_PARALLEL`, default 4) plus about 2 GB for
+  the services, about 30 GB disk for the images.
+- For the build: internet (GitHub, Docker Hub, package mirrors). In operation the stack needs no internet.
 
-1. On the KIRA server: `CODE_INTERPRETER=yes` in `setup.sh` with the address of the code server
-   (e.g. `http://10.0.0.60:3112`). It generates the key pair; the public key is in `/opt/kira/config/codeapi-jwks.json`.
-2. On the code server:
-   ```bash
-   mkdir -p /opt/codeinterpreter
-   # copy compose.kira.yml and setup-codeapi.sh from this folder to /opt/codeinterpreter
-   scp root@<KIRA-IP>:/opt/kira/config/codeapi-jwks.json /opt/codeinterpreter/jwks.json
-   bash /opt/codeinterpreter/setup-codeapi.sh
-   ```
-   The script clones the pinned release (`CODEAPI_VERSION`, default v1.9.1), generates all secrets into
-   `/opt/codeinterpreter/.env` (600), builds the images (the first build takes 30 minutes or more) and starts them.
-3. Firewall of the code server: port 3112 only from the KIRA server, e.g.
-   `ufw allow from <KIRA-IP> to any port 3112 proto tcp`.
-4. On the KIRA server: `bash /opt/kira/scripts/self-test.sh` – section "Code interpreter".
+## Switching on
 
-Over the internet: put a reverse proxy with TLS in front of port 3112 and enter `https://…` in `setup.sh`; still allow
-it only from the public IP of the KIRA server.
+```bash
+nano /opt/kira/env/setup.env          # CODE_INTERPRETER="true" (or answer the question in setup.sh)
+bash /opt/kira/setup.sh               # start with "yes" – the first build takes 30 minutes or more
+bash /opt/kira/scripts/self-test.sh   # section "Code interpreter": containers, API, a Python run that writes a .docx
+```
+
+`setup.sh` then
+
+1. clones `CODEAPI_VERSION` (`env/versions.env`, default v1.9.1) to `src/`,
+2. generates the secrets into `env/codeapi.env` (600) and puts the public key of LibreChat there,
+3. sets the code interpreter variables in `/opt/kira/env/librechat.env` (private key, `http://codeapi:3112/v1`),
+4. switches on code execution for the agents with `CODE=true` (KIRA, Code, Textwerkstatt, Protokoll),
+5. builds the images (only when the version changed) and starts the stack before LibreChat.
+
+In KIRA: "Erstelle eine Word-Datei mit einer Einladung zum Sommerfest" → the `.docx` appears in the chat.
 
 ## What `compose.kira.yml` changes
 
 | Project default (developer mode) | For KIRA |
 |---|---|
-| `LOCAL_MODE=true` – no login | only tokens signed by KIRA (`librechat-jwt`, EdDSA, public key from `jwks.json`) |
-| passwords `localdev`, `minioadmin`, example keys | own secrets, generated into `.env` |
-| Redis, MinIO, file server, sandbox, egress gateway published | only the API (`BIND_IP:API_PORT`) |
-| | `restart: unless-stopped` for all services |
+| `LOCAL_MODE=true` – no login | only tokens signed by KIRA (`librechat-jwt`, EdDSA, max. 5 minutes) |
+| passwords `localdev`, `minioadmin`, example keys | own secrets, generated into `env/codeapi.env` |
+| API, Redis, MinIO, file server, sandbox, egress gateway published on the host | no published ports; LibreChat reaches only the API over `kira-code` |
+| default network with internet | `codeinterpreter_backend` internal: no internet, no LAN |
+| remote bridge (external sandbox VMs) enabled | off |
+| 8 parallel runs | `CODE_PARALLEL` (default 4) |
+| container names `api`, `redis`, `minio` … | `codeapi`, `codeapi-redis`, `codeapi-minio` …; restart after reboot, log rotation |
 
 The hardening of the project stays on: KVM microVM with NsJail inside, seccomp, egress gateway, signed execution
 manifests.
@@ -53,15 +61,19 @@ manifests.
 
 | What | How |
 |---|---|
-| Status | `docker compose -p codeinterpreter ps` · `curl http://127.0.0.1:3112/v1/health` |
-| Logs | `docker logs --tail 100 api` · `docker logs --tail 100 service-worker` · `docker logs --tail 100 sandbox-runner` |
-| Update | `CODEAPI_VERSION=v1.x.y bash /opt/codeinterpreter/setup-codeapi.sh` |
-| New key on the KIRA server | copy `codeapi-jwks.json` again to `jwks.json`, run `setup-codeapi.sh` |
-| Switch off | `CODE_INTERPRETER=false` in `/opt/kira/env/setup.env`, `bash /opt/kira/setup.sh`; here `docker compose -p codeinterpreter down` |
+| Status | `bash /opt/codeinterpreter/codeapi.sh ps` |
+| Logs | `bash /opt/codeinterpreter/codeapi.sh logs --tail 100 api` (also `service-worker`, `sandbox-runner`, `file_server`) |
+| Restart | `bash /opt/codeinterpreter/codeapi.sh restart` |
+| Update | `CODEAPI_VERSION=v1.x.y` in `/opt/codeinterpreter/env/versions.env`, then `bash /opt/kira/setup.sh` (builds again) |
+| Parallel runs | `CODE_PARALLEL` in `/opt/kira/env/setup.env`, then `setup.sh` |
+| Switch off | `CODE_INTERPRETER=false` in `/opt/kira/env/setup.env`, `bash /opt/kira/setup.sh`, then `bash /opt/codeinterpreter/codeapi.sh down` |
+| Backup | `scripts/backup.sh` keeps `env/` and the settings; `src/`, images and temporary files are rebuilt |
 
 ## Security
 
-- The sandbox runs code that a language model wrote – treat the server as exposed: no other services on it, no
-  access to the LAN, keep it patched. Never run it without KVM (`KVM_ENABLED=false` shares the host kernel).
-- KIRA's private key never leaves the KIRA server; the code server only knows the public key.
-- Files of a chat are copied into the sandbox for a run; results come back to LibreChat and are stored there.
+- The sandbox runs code that a language model wrote. Each run gets its own small VM (own kernel) without network;
+  it only talks to the egress gateway, which only passes files and tool calls.
+- The private key stays in `/opt/kira/env/librechat.env`; the code interpreter only knows the public key.
+- Never run it without KVM (`KVM_ENABLED=false` shares the host kernel – only for development).
+- A sandbox escape would land on the KIRA server: keep the host patched and raise `CODEAPI_VERSION` for security
+  releases.
