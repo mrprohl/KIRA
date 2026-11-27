@@ -5,10 +5,10 @@ the KIRA server** – one vLLM instance per model, each with its own env file.
 
 | Instance | Template | Served name | Port | Server |
 |---|---|---|---|---|
-| Privacy checker | `privacy.env.example` | `kira-privacy` | 8101 | privacy (1× A100) |
-| Embeddings | `embedding.env.example` | `kira-embedding` | 8104 | privacy (same GPU) |
-| Safety checker | `safety.env.example` | `kira-safety` | 8102 | safety (1× A100) |
-| Local answer model | `answer.env.example` | `kira-answer` | 8103 | answer (6× A100) |
+| Privacy checker | `privacy.env.example` | `kira-privacy` | 8101 | privacy |
+| Embeddings | `embedding.env.example` | `kira-embedding` | 8104 | embedding (own server, small GPU) |
+| Safety checker | `safety.env.example` | `kira-safety` | 8102 | safety |
+| Local answer model | `answer.env.example` | `kira-answer` | 8103 | answer |
 
 The **served names** are fixed – KIRA addresses the models by them. Which model is behind a name is up to you (`MODEL=`).
 The ports are only proposals; KIRA gets the full address of each instance in `setup.sh`.
@@ -27,8 +27,9 @@ docker logs -f kira-privacy          # first start downloads the model
 curl -s -H "Authorization: Bearer <key>" http://127.0.0.1:8101/v1/models
 ```
 
-On the privacy server the same with `embedding.env` (second instance on the same GPU – `GPU_MEM` of both together
-below 0.95).
+The same on the other servers with their env file. The embedding model has its own server, so the document uploads
+(many embeddings at once) never slow down the privacy checks that every request waits for. If you still want both on
+one GPU: the FP8 variant of the privacy checker and `GPU_MEM` of both together below 0.95.
 
 - **API key:** the same on all instances and in `/opt/bifrost/env/bifrost.env` (`VLLM_API_KEY`) on the KIRA server.
   `setup.sh` generates one if you leave it empty: `grep ^VLLM_API_KEY /opt/bifrost/env/bifrost.env`.

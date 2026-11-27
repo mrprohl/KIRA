@@ -30,8 +30,8 @@ models themselves can only be tested on the servers – start in mode `observe`.
 
 | Role | Server | Model (proposal) | Served name |
 |---|---|---|---|
-| Privacy checker | 1× A100 80 GB | `Qwen/Qwen3.5-35B-A3B-FP8` with KIRA's checking prompt (FP8: about 35 GB, leaves room for the embedding model; BF16 does not fit next to it) | `kira-privacy` |
-| Embeddings | same server and GPU as the privacy checker | `Qwen/Qwen3-Embedding-0.6B` | `kira-embedding` |
+| Privacy checker | 1× A100 80 GB, alone | `Qwen/Qwen3.5-35B-A3B` (BF16, about 70 GB – tight on 80 GB; fallback the FP8 variant) with KIRA's checking prompt | `kira-privacy` |
+| Embeddings | own server, a small GPU is enough | `Qwen/Qwen3-Embedding-0.6B` (better search: `-8B`) | `kira-embedding` |
 | Safety checker | 1× A100 80 GB | `Qwen/Qwen3Guard-Gen-8B` | `kira-safety` |
 | Answer model | 6× A100 80 GB | `Qwen/Qwen3.8-Flash-Next-FP8` (fallback `Qwen/Qwen3.8-27B`) | `kira-answer` |
 

@@ -293,7 +293,7 @@ if is_true PRIVACY_GUARD; then
   ensure_text GUARD_PRIVACY_URL "vLLM address of the privacy checker (e.g. http://10.0.0.50:8101)" "$VLLM_URL_RE" "Form http://host:port."
   ensure_text GUARD_SAFETY_URL "vLLM address of the safety checker, Qwen3Guard (e.g. http://10.0.0.51:8102)" "$VLLM_URL_RE" "Form http://host:port."
   ensure_text GUARD_ANSWER_URL "vLLM address of the local answer model (e.g. http://10.0.0.52:8103)" "$VLLM_URL_RE" "Form http://host:port."
-  ensure_text GUARD_EMBEDDING_URL "vLLM address of the embedding model (usually on the privacy server, e.g. http://10.0.0.50:8104)" "$VLLM_URL_RE" "Form http://host:port."
+  ensure_text GUARD_EMBEDDING_URL "vLLM address of the embedding model (e.g. http://10.0.0.53:8104)" "$VLLM_URL_RE" "Form http://host:port."
   ensure_optional GUARD_MODE "Mode: observe (only decide and count – start with this) or enforce (empty = observe)" '^(observe|enforce)$' "observe or enforce."
   ensure_yesno GUARD_SLACK "Privacy guard: weekly counts (no content) to Slack?"
 fi

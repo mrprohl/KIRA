@@ -34,7 +34,7 @@
 </g>
 <g font-size="12" fill="#444441">
 <rect x="40" y="462" width="600" height="40" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.8"/>
-<text x="340" y="487" text-anchor="middle">Embeddings (document search): Qwen3-Embedding on the privacy server – documents never leave</text>
+<text x="340" y="487" text-anchor="middle">Embeddings (document search): Qwen3-Embedding on its own server – documents never leave</text>
 <text x="40" y="528">The models run with vLLM on separate GPU servers (one instance each); Bifrost reaches only these.</text>
 </g>
 </svg>
