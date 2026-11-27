@@ -5,6 +5,20 @@
 Personal AI assistant on its own server: [LibreChat](https://www.librechat.ai) as the chat interface, fixed agents per
 Keycloak group, [Bifrost](https://docs.getbifrost.ai) as the LLM gateway (Anthropic, OpenAI) with budgets, web search
 with SearXNG and Firecrawl, optional intranet search with Onyx – everything behind Caddy, login via Keycloak SSO.
+Optionally a privacy guard checks every request with own LLMs before it leaves the house.
+
+## Features
+
+- **Chat with fixed agents** (KIRA, code, intranet, images, writing, minutes) – which agents a user sees comes from
+  the Keycloak groups; own agents with the models of the user's model groups
+- **LLM gateway** Bifrost: one virtual key per application, budgets per time window, cost logs, fallbacks
+- **Web search** without a search API (SearXNG, Firecrawl), **document search** (RAG), **intranet search** (Onyx, optional)
+- **Images and speech** (optional), own logo, favicon and agent icons
+- **Privacy guard** (optional, [details](kira/PRIVACY-GUARD.md)): personal or secret data is answered by a local
+  model on own vLLM servers, harmful requests are refused, only clean requests go to Claude or OpenAI
+- **Security:** only Caddy is published, egress firewall (no LAN access for the containers), secrets generated on the
+  server – [security review](kira/SECURITY.md)
+- **Operation:** one `setup.sh` for everything, self-test, monitoring (Uptime Kuma), backups, Slack reports
 
 ## Structure
 
