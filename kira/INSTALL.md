@@ -42,19 +42,19 @@ Only if Onyx is used:
 
 ## Step 1b – vLLM servers (only with the privacy guard)
 
-On the GPU servers, not on the KIRA server – details in `vllm/README.md` of the package:
+On the vLLM servers, not on the KIRA server – details in `vllm/README.md` of the package:
 
 | Server | Instances (env file) | Address for setup.sh |
 |---|---|---|
-| privacy (1× A100) | `privacy.env` (`kira-privacy`, port 8101) and `embedding.env` (`kira-embedding`, port 8104) | `http://<ip>:8101`, `http://<ip>:8104` |
-| safety (1× A100) | `safety.env` (`kira-safety`, port 8102) | `http://<ip>:8102` |
-| answer (6× A100) | `answer.env` (`kira-answer`, port 8103) | `http://<ip>:8103` |
+| privacy | `privacy.env` (`kira-privacy`, port 8101) and `embedding.env` (`kira-embedding`, port 8104) | `http://<ip>:8101`, `http://<ip>:8104` |
+| safety | `safety.env` (`kira-safety`, port 8102) | `http://<ip>:8102` |
+| answer | `answer.env` (`kira-answer`, port 8103) | `http://<ip>:8103` |
 
 - one API key for all instances – leave it empty in `setup.sh` (it generates one) and enter it afterwards in the env
   files of the vLLM servers, or set your own on both sides
-- allow the ports on the GPU servers only from `<KIRA-IP>`
+- allow the ports on the vLLM servers only from `<KIRA-IP>`
 
-**Checkpoint:** on each GPU server `curl -s -H "Authorization: Bearer <key>" http://127.0.0.1:<port>/v1/models` lists the
+**Checkpoint:** on each vLLM server `curl -s -H "Authorization: Bearer <key>" http://127.0.0.1:<port>/v1/models` lists the
 served name. (They can also be started after step 3 – the self-test then reports them as not reachable.)
 
 ---
