@@ -46,7 +46,7 @@ On the vLLM servers, not on the KIRA server – details in `vllm/README.md` of t
 
 | Server | Instances (env file) | Recommended model | Address for setup.sh |
 |---|---|---|---|
-| privacy | `privacy.env` (`kira-privacy`, port 8101) and `embedding.env` (`kira-embedding`, port 8104) | `Qwen/Qwen3.5-35B-A3B` and `Qwen/Qwen3-Embedding-0.6B` | `http://<ip>:8101`, `http://<ip>:8104` |
+| privacy | `privacy.env` (`kira-privacy`, port 8101) and `embedding.env` (`kira-embedding`, port 8104) | `Qwen/Qwen3.5-35B-A3B-FP8` and `Qwen/Qwen3-Embedding-0.6B` (both on one 80 GB GPU) | `http://<ip>:8101`, `http://<ip>:8104` |
 | safety | `safety.env` (`kira-safety`, port 8102) | `Qwen/Qwen3Guard-Gen-8B` | `http://<ip>:8102` |
 | answer | `answer.env` (`kira-answer`, port 8103) | `Qwen/Qwen3.8-Flash-Next-FP8` (fallback `Qwen/Qwen3.8-27B`) | `http://<ip>:8103` |
 
