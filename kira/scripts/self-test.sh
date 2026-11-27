@@ -118,6 +118,36 @@ else
       POST http://bifrost:8080/v1/chat/completions "$VK" \
       '{"model":"anthropic/claude-haiku-5-5","max_tokens":5,"messages":[{"role":"user","content":"Just say: ok"}]}'
   fi
+  if [ "$(setup_get OFFICE_DOCUMENTS)" = "true" ]; then
+    echo "== Office documents =="
+    check_http "LibreChat -> Office MCP server" '^200 ' \
+      "docker compose -f /opt/office/docker-compose.yml ps; docker logs --tail 50 office-mcp" \
+      GET http://office-mcp:8958/healthz
+    # end to end: upload like the Office MCP server does (via Caddy, signed for the KIRA domain), then download
+    res=$(docker exec -i office-mcp python - 2>&1 <<'PY'
+import os, urllib.request, boto3
+from botocore.config import Config
+s3 = boto3.client("s3", endpoint_url=os.environ["MINIO_ENDPOINT"], aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+                  aws_secret_access_key=os.environ["MINIO_SECRET_KEY"], region_name="us-east-1",
+                  config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+s3.put_object(Bucket="kira-files", Key="selbsttest.txt", Body=b"KIRA", ContentType="text/plain")
+url = s3.generate_presigned_url("get_object", Params={"Bucket": "kira-files", "Key": "selbsttest.txt"}, ExpiresIn=60)
+print("OK" if urllib.request.urlopen(url, timeout=20).read() == b"KIRA" else "content differs")
+PY
+)
+    if [ "${res##*$'\n'}" = OK ]; then ok "download link: upload via Caddy and signed download work"
+    else bad "download link: ${res:0:200}"
+      hint "Caddy route sites/kira.d/office.caddy, docker logs --tail 30 office-files; certificate of the KIRA domain valid?"; fi
+  fi
+  if [ "$(setup_get CODE_INTERPRETER)" = "true" ]; then
+    echo "== Code interpreter =="
+    base=$(env_get "$LC_ENV" LIBRECHAT_CODE_BASEURL)
+    check_http "LibreChat -> code server ($base)" '^200 ' \
+      "code server running (codeinterpreter/README.md)? Firewall: LIBRECHAT_EXTRA_DST in config/egress.env" \
+      GET "$base/health"
+    if [ -s /opt/kira/config/codeapi-jwks.json ]; then ok "public key for the code server: /opt/kira/config/codeapi-jwks.json"
+    else bad "public key /opt/kira/config/codeapi-jwks.json missing"; hint "bash /opt/kira/setup.sh"; fi
+  fi
   if [ "$(setup_get PRIVACY_GUARD)" = "true" ]; then
     echo "== Privacy guard =="
     mode=$(setup_get GUARD_MODE); mode=${mode:-observe}

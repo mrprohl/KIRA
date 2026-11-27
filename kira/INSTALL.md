@@ -35,6 +35,8 @@ Only if Onyx is used:
 - [ ] DNS record for the Onyx domain (e.g. `onyx.example.com`) pointing to the public IP of the upstream proxy, and add the
       domain to that proxy
 - [ ] public IPs of the admins who may open the Onyx web interface (`ONYX_ALLOWED_IPS`)
+- [ ] decision: office documents yes/no (Word, Excel, PowerPoint with download links, `OFFICE_DOCUMENTS`)
+- [ ] decision: code interpreter yes/no – needs an own server with KVM (`codeinterpreter/README.md`); its address
 
 **Checkpoint:** everything ticked.
 
@@ -68,7 +70,7 @@ ss -tlnp | grep -E ':(80|443|8080) '                   # ports must be free – 
 apt install -y cron python3 curl openssl unzip
 cd /root && unzip -o kira-stack.zip -d /opt             # extract directly on the server, not on Windows
 umask 077; scp root@<KEYCLOAK-IP>:/opt/keycloak/env/kira-client-kira.env /opt/kira/env/keycloak-client.env
-ls /opt                                                 # caddy bifrost kira websearch onyx vllm
+ls /opt                                                 # caddy bifrost kira websearch onyx office codeinterpreter vllm
 ```
 
 The certificates live in the volume `caddy_data` and survive a reinstall.
@@ -92,6 +94,8 @@ Answers for this server:
 | upstream reverse proxy | `<PROXY-IP>` |
 | internal IP of the Keycloak server | `<KEYCLOAK-IP>` |
 | Onyx / images / speech | as decided in step 1; speech output e.g. `gpt-4o-mini-tts`, leave the default voice empty (= `fable`) |
+| Office documents? | as decided in step 1; link lifetime empty = 24 hours |
+| Code interpreter? | as decided in step 1; with `yes` the address of the code server (e.g. `http://<ip>:3112`) |
 | Privacy guard? | as decided in step 1; with `yes`: the four vLLM addresses from step 1b, mode `observe`, Slack counts `yes`; vLLM API key empty = generate |
 | Restrict agents per Keycloak group? | `yes` if the groups are set up in Keycloak – mapper `groups`, default group `kira-users-default` under *Realm settings* → *User registration* → *Default groups* (README, section "Agents per Keycloak group"), otherwise `no` |
 | How long does a login stay active? | empty = `30d` (possible `8h` to `365d`) |
@@ -237,6 +241,27 @@ beantwortet". After one or two weeks: `scripts/privacy-report.sh`, then `GUARD_M
 `setup.sh` again.
 
 **Checkpoint:** self-test section "Privacy guard" all OK, the test IBAN is recognised.
+
+---
+
+## Step 8c – Office documents and code interpreter (only if enabled)
+
+Office documents: `bash /opt/kira/scripts/self-test.sh` – section "Office documents" uploads a test file through Caddy
+and downloads it with a signed link. In KIRA: "Erstelle eine Word-Datei mit einer kurzen Einladung zum Sommerfest" –
+the answer contains a link to the `.docx`. Own letterhead: `custom_docx_template.docx` in `/opt/office/templates`.
+
+Code interpreter (on the code server, see `codeinterpreter/README.md`):
+
+```bash
+scp root@<KIRA-IP>:/opt/kira/config/codeapi-jwks.json /opt/codeinterpreter/jwks.json
+bash /opt/codeinterpreter/setup-codeapi.sh      # first build 30 minutes or more
+ufw allow from <KIRA-IP> to any port 3112 proto tcp
+```
+
+Then on the KIRA server `bash /opt/kira/scripts/self-test.sh` – section "Code interpreter". In KIRA: "Rechne mit Code:
+Wie viele Tage sind es bis Weihnachten? Erstelle dazu eine CSV-Datei." – the answer contains the result and the file.
+
+**Checkpoint:** both self-test sections OK, a document and a file from the code interpreter downloaded.
 
 ---
 

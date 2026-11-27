@@ -1,0 +1,11 @@
+# ============================================================================
+# office – paste this file into Portainer (stack name office, no environment variables)
+#   or via CLI:  docker compose -f /opt/office/docker-compose.yml up -d
+# Definition: /opt/office/compose.yml · versions: /opt/office/env/versions.env (from /opt/kira/setup.sh)
+# Requires Docker Compose ≥ 2.20 (include with env_file) and read access to /opt.
+# ============================================================================
+name: office
+
+include:
+  - path: /opt/office/compose.yml
+    env_file: /opt/office/env/versions.env

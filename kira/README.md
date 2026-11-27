@@ -40,6 +40,13 @@ flowchart LR
     OX[Onyx<br/>intranet index, MCP]
   end
 
+  subgraph office["/opt/office (optional)"]
+    OM[Office MCP<br/>Word, Excel, PowerPoint]
+    OF[kira-files<br/>download links]
+  end
+
+  CI[Code interpreter<br/>own server with KVM, optional]
+
   C --> LC
   C -->|LLM API, admin UI| BF
   C -->|admin UI| OX
@@ -50,6 +57,10 @@ flowchart LR
   LC -->|web search| SX & FC
   LC -->|MCP: agent Intranet| OX
   OX -->|LLM| BF
+  LC -->|MCP: documents| OM
+  OM -->|upload via Caddy| OF
+  C -->|/kira-files/ links| OF
+  LC -->|run code| CI
   BF --> BDB
   LC -.->|OIDC| KC([Keycloak → Microsoft 365])
   BF ==>|internet| AI([Anthropic, OpenAI])
@@ -73,6 +84,9 @@ Large version as an image: [docs/architecture.png](docs/architecture.png).
 | websearch | SearXNG | meta search (Google, Bing, Brave, Startpage, Mojeek) without account or API costs | returns the result list |
 | | Firecrawl (+ Playwright, Redis, RabbitMQ, Postgres) | fetches the result pages and turns them into readable text | the model itself cannot access the internet via the API |
 | onyx | Onyx Community Edition | indexes SharePoint (documents, notes …), provides the search via MCP | intranet knowledge without uploading per agent; needs 12–16 GB RAM |
+| office | Office MCP server ([mcp-ms-office-documents](https://github.com/ForLegalAI/mcp-ms-office-documents), MIT) | creates Word, Excel, PowerPoint files and e-mail drafts, also from own templates | documents on request, without code execution |
+| | kira-files (`office/files/kira_files.py`) | keeps the files, hands them out only with a signed, time-limited link | download link in the chat (LibreChat cannot take files from an MCP server) |
+| own server | code interpreter ([ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter), Apache 2.0) | runs code written by the model in a KVM sandbox: analyses, charts, PDF/CSV | needs hardware virtualisation – [codeinterpreter/README.md](../codeinterpreter/README.md) |
 
 ## Connections and networks
 
@@ -88,10 +102,11 @@ With Keycloak in the LAN (`KEYCLOAK_INTERNAL_IP`) LibreChat gets no internet at 
 | `kira-llm` | 172.30.21.0/24, internal | Bifrost, LibreChat, RAG API, Onyx | models/embeddings via Bifrost |
 | `kira-search` | 172.30.22.0/24, internal | LibreChat, SearXNG, Firecrawl | web search |
 | `kira-onyx` | 172.30.23.0/24, internal | LibreChat, Onyx MCP | agent "Intranet" |
+| `kira-office` | 172.30.28.0/24, internal | Caddy (.2), LibreChat, Office MCP, kira-files | documents and their download links |
 | `*_backend` | 172.30.24–27.0/24, internal | each stack's databases | databases only within their own stack |
 | `kira-edge` | 172.31.60.0/24 | Caddy | certificates |
 | `bifrost-outbound` | 172.31.61.0/24 | Bifrost | Anthropic, OpenAI |
-| `kira-outbound` | 172.31.62.0/24 | LibreChat | Keycloak (OIDC) – with `KEYCLOAK_INTERNAL_IP` nothing else (no internet) |
+| `kira-outbound` | 172.31.62.0/24 | LibreChat | Keycloak (OIDC) – with `KEYCLOAK_INTERNAL_IP` nothing else (no internet); with the code interpreter also its server (exactly ip:port) |
 | `websearch-outbound` | 172.31.63.0/24 | SearXNG, Firecrawl | search engines, web pages |
 | `onyx-outbound` | 172.31.64.0/24 | Onyx | SharePoint, Hugging Face (models on first start) |
 
@@ -150,6 +165,8 @@ restarts the affected services.
 | `KEYCLOAK_INTERNAL_IP` | Keycloak directly in the LAN (extra_hosts + exception in the LAN block); LibreChat then gets no internet, only Keycloak:443 and DNS |
 | `LLM_API_DOMAIN`, `BIFROST_UI_DOMAIN` (+ `…_ALLOWED_IPS`) | LLM API for external applications and Bifrost web interface from outside |
 | `AGENT_BUILDER` | only switch via `scripts/agent-builder.sh on|off` |
+| `OFFICE_DOCUMENTS`, `OFFICE_LINK_HOURS` | Word, Excel, PowerPoint and e-mail drafts with download link (stack office); links valid 24 h by default – section "Office documents" |
+| `CODE_INTERPRETER`, `CODE_API_URL` | code interpreter on an own server with KVM – section "Code interpreter" |
 | `PRIVACY_GUARD`, `GUARD_*` | privacy guard with own LLMs on vLLM servers: personal/secret data answered locally, harmful requests refused – [PRIVACY-GUARD.md](PRIVACY-GUARD.md). `false` = as without it |
 
 ## Agents
@@ -346,6 +363,40 @@ could search the indexed intranet content. KIRA itself talks to Onyx internally 
 
 OpenSearch needs `vm.max_map_count=262144` on the host (for LXC set it on the Proxmox host; `setup.sh` warns).
 
+## Office documents
+
+With `OFFICE_DOCUMENTS=true` the agents with `OFFICE=true` (KIRA, writing, minutes) create files on request:
+"Mach daraus eine Word-Datei", "Erstelle eine Excel-Tabelle mit …", "Bau mir 5 Folien zu …", "Entwirf eine E-Mail an …".
+
+1. LibreChat calls the tool of the Office MCP server (stack `office`); the model passes the content (Markdown or a slide
+   structure).
+2. The server builds the file and uploads it to kira-files – via Caddy to `https://<KIRA domain>/kira-files/…`, so the
+   link is signed for the public address.
+3. The answer contains the link, e.g. `[Bericht.docx](https://kira.example.com/kira-files/…)`. It works without login
+   but only with the signature and only for `OFFICE_LINK_HOURS` (default 24 h); then kira-files deletes the file.
+
+| What | Where |
+|---|---|
+| own letterhead, styles, PowerPoint design | `/opt/office/templates/` (`custom_docx_template.docx`, `custom_pptx_template_16_9.pptx`, …) |
+| template tools with `{{placeholders}}` (e.g. a fixed letter) | `/opt/office/config/` (`docx_templates.yaml`, `email_templates.yaml`, `pptx_templates.yaml`) – [templates](https://github.com/ForLegalAI/mcp-ms-office-documents/blob/main/docs/templates.md) |
+| link lifetime | `OFFICE_LINK_HOURS` in `env/setup.env`, then `setup.sh` |
+| test | `scripts/self-test.sh` – section "Office documents" uploads and downloads a test file |
+
+Templates are re-read on change, no restart needed. PDF is not possible with the Office tools – the code interpreter
+can do it. Who has the link can download the file until it expires: do not forward links of confidential documents.
+
+## Code interpreter
+
+With `CODE_INTERPRETER=true` the agents with `CODE=true` (KIRA, code) may run code; "Run Code" appears on code blocks.
+The code runs on **an own server with KVM** (hardware virtualisation), never on the KIRA server – setup there:
+[codeinterpreter/README.md](../codeinterpreter/README.md).
+
+- `setup.sh` asks for the address (`CODE_API_URL`, e.g. `http://10.0.0.60:3112`), generates an Ed25519 key pair and
+  writes the public key to `/opt/kira/config/codeapi-jwks.json` – copy it to the code server (`jwks.json`).
+- LibreChat signs a short token (5 minutes) per run; the code server accepts nothing else.
+- The firewall lets LibreChat reach exactly this ip:port (`LIBRECHAT_EXTRA_DST` in `config/egress.env`).
+- Files the code creates (`/mnt/data`) appear in the chat for download; they are stored in LibreChat like uploads.
+
 ## Operations
 
 | What | How |
@@ -360,6 +411,8 @@ OpenSearch needs `vm.max_map_count=262144` on the host (for LXC set it on the Pr
 | Backup | daily at 02:30 to `/var/backups/kira/<date>/` (Bifrost DB, MongoDB, RAG, Onyx DB, uploads, `/opt` stacks incl. secrets), 14 days; push "KIRA Backup" |
 | Versions | edit `/opt/<stack>/env/versions.env`, redeploy the stack. Back up first. Pinned versions instead of `latest` where possible. With the privacy guard, Bifrost: change `BIFROST_TAG`, then `setup.sh` (builds the image with the plugin) |
 | Caddy | site blocks `/opt/caddy/config/sites/*.caddy` freely editable, `docker exec caddy caddy reload --config /etc/caddy/Caddyfile` |
+| Office documents | `docker compose -f /opt/office/docker-compose.yml logs --tail 50`; templates in `/opt/office/templates` and `/opt/office/config` |
+| Code interpreter | on the code server: `docker compose -p codeinterpreter ps`; from KIRA: `scripts/self-test.sh` (section "Code interpreter") |
 | Privacy guard | decisions `docker logs bifrost 2>&1 \| grep 'privacy-guard mode='`, counts `scripts/privacy-report.sh` – [PRIVACY-GUARD.md](PRIVACY-GUARD.md) |
 | Logo and favicon | replace the files in `/opt/kira/branding/`, `bash /opt/kira/setup.sh` (restarts LibreChat) – section "Branding" |
 
@@ -394,6 +447,10 @@ KIRA app may have to be installed again.
 | `$'\r': command not found` when starting setup.sh | file edited on Windows: `sed -i 's/\r$//' /opt/kira/setup.sh` |
 | `env file … not found` in Portainer | `setup.sh` has not run, or Portainer has no volume `/opt:/opt:ro` |
 | images cannot be pulled | check tag/registry in `env/versions.env` (LibreChat: fall back to `ghcr.io/librechat-ai/…`) |
+| office documents: no link, "upload failed" | `docker logs --tail 30 office-mcp`; with the IP allowlist in `kira.caddy` (`@blocked not client_ip …`) add `172.30.28.0/24`, otherwise Caddy blocks the uploads |
+| download link: "Der Download-Link ist abgelaufen" / file gone | links are valid `OFFICE_LINK_HOURS` (default 24 h) – ask KIRA to create the file again |
+| code interpreter: "connection refused" / timeout | code server running? `LIBRECHAT_EXTRA_DST` in `config/egress.env`, firewall of the code server (port 3112 from the KIRA server) |
+| code interpreter: 401 | `jwks.json` on the code server is not the current `/opt/kira/config/codeapi-jwks.json` – copy it again, run `setup-codeapi.sh` |
 | SSO: "You must have … role" | claim `roles` (or `groups` with `AGENT_GROUPS=true`) missing in the ID token, or user in no permitted group |
 | SSO: `redirect_uri` invalid | add the redirect URI in the Keycloak client (see Installation) |
 | SSO: error 500 / timeout at login | LibreChat cannot reach Keycloak: `KEYCLOAK_INTERNAL_IP`, LAN block exception, firewall of the Keycloak server |

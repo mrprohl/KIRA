@@ -64,6 +64,12 @@ accepted and listed below.
   by a local model, harmful requests refused; fail-closed when a checker is down. Bifrost then runs as an own build with
   the plugin and may reach exactly the vLLM servers in the LAN (ip:port). The checkers are language models – no
   guarantee, the data processing agreements stay necessary.
+- Optional office documents: the Office MCP server has no internet; files are handed out only with a signed,
+  time-limited link (S3 Signature V4, checked by kira-files) and deleted afterwards. Uploads to `/kira-files/` are only
+  accepted from the network `kira-office`. Who has a link can download the file until it expires.
+- Optional code interpreter: runs on an own server in a KVM sandbox (never on the KIRA server); LibreChat signs a token
+  per run (Ed25519, 5 minutes), the private key stays on the KIRA server; the firewall lets LibreChat reach exactly that
+  ip:port.
 
 ### Networks and egress
 

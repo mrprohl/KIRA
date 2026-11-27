@@ -17,6 +17,8 @@ The number at the beginning sets the order in the selection. New agent: copy a p
 | `FILE_SEARCH` | `true` = may search uploaded documents (RAG) |
 | `INTRANET` | `true` = searches the intranet via Onyx (only if Onyx is active) |
 | `IMAGES` | `true` = image agent; needs the `AGENT_ID` of an agent created in the web interface (README) |
+| `OFFICE` | `true` = creates Word, Excel, PowerPoint files and e-mail drafts with download link (only with `OFFICE_DOCUMENTS=true`) |
+| `CODE` | `true` = may run code (analyses, charts, PDF/CSV files; only with `CODE_INTERPRETER=true`) |
 | `AGENT_ID` | image agents only: ID from LibreChat (`agent_…`) |
 | `ENABLED` | `false` = hidden without deleting the files |
 

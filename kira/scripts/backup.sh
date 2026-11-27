@@ -2,7 +2,7 @@
 # ============================================================================
 # backup.sh – daily via cron (/etc/cron.d/kira), can also be run by hand:
 #   Bifrost DB, LibreChat MongoDB, RAG vector database, Onyx DB (if active), LibreChat uploads/images and
-#   /opt/{caddy,bifrost,kira,websearch,onyx} (incl. env/ – secrets!) to $BACKUP_DIR/<date_time>/,
+#   /opt/{caddy,bifrost,kira,websearch,onyx,office} (incl. env/ – secrets!) to $BACKUP_DIR/<date_time>/,
 #   kept for $BACKUP_KEEP_DAYS days. Result -> Uptime Kuma (push monitor "KIRA Backup"), errors also -> Slack.
 # Not backed up (rebuilt automatically): Meilisearch index, Onyx OpenSearch index, Firecrawl queues.
 # Restore: README, section "Operations".
@@ -54,7 +54,7 @@ fi
 
 # --- stack folders incl. secrets ---
 dirs=()
-for d in caddy bifrost kira websearch onyx; do [ -d "/opt/$d" ] && dirs+=("$d"); done
+for d in caddy bifrost kira websearch onyx office; do [ -d "/opt/$d" ] && dirs+=("$d"); done
 tar czf "$target/opt-stacks.tgz" -C /opt "${dirs[@]}"
 
 trap - ERR

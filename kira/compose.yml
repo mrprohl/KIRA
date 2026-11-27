@@ -40,6 +40,7 @@ services:
       kira-llm: {}
       kira-search: {}
       kira-onyx: {}
+      kira-office: {}            # Office MCP server (optional office stack)
     extra_hosts:
       # Keycloak directly in the LAN (setup.sh, env/compose.env) – without an entry a harmless placeholder
       - "${KEYCLOAK_HOST:-keycloak.invalid}:${KEYCLOAK_IP:-127.0.0.1}"
@@ -180,6 +181,8 @@ networks:
   kira-search:
     external: true
   kira-onyx:
+    external: true
+  kira-office:
     external: true
 
 volumes:
