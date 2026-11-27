@@ -1,0 +1,13 @@
+# ============================================================================
+# docs – started by /opt/kira/setup.sh (the image kira/docs is built there, so Portainer alone is not enough)
+#   or via CLI:  docker compose -f /opt/docs/docker-compose.yml up -d
+# Definition: /opt/docs/compose.yml · versions: env/versions.env · Keycloak/NAS address: env/compose.env (setup.sh)
+# Requires Docker Compose ≥ 2.20 (include with env_file) and read access to /opt.
+# ============================================================================
+name: docs
+
+include:
+  - path: /opt/docs/compose.yml
+    env_file:
+      - /opt/docs/env/versions.env
+      - /opt/docs/env/compose.env

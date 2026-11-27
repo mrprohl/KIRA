@@ -15,7 +15,10 @@ The number at the beginning sets the order in the selection. New agent: copy a p
 | `DEFAULT` | `true` = preselected (only one agent) |
 | `WEB_SEARCH` | `true` = may search the internet (SearXNG + Firecrawl) |
 | `FILE_SEARCH` | `true` = may search uploaded documents (RAG) |
-| `INTRANET` | `true` = searches the intranet via Onyx (only if Onyx is active) |
+| `INTRANET` | `true` = searches the intranet via Onyx (only if Onyx is active; with the document search `DOCS_ENABLED` replaced by `DOCS`) |
+| `DOCS` | `true` = searches its own folder `<NAME>` on the NAS, sources as links to the original ([docs/README.md](../../docs/README.md), only with `DOCS_ENABLED=true`) |
+| `TEMPLATES` | `true` = writes letters and documents from the templates in `<NAME>/_vorlagen` (needs `CODE=true`) |
+| `CONFIDENTIAL` | `true` = answers, titles and image transcription only with the local model of the privacy guard (`setup.sh` stops without `PRIVACY_GUARD=true`) |
 | `IMAGES` | `true` = image agent; needs the `AGENT_ID` of an agent created in the web interface (README) |
 | `CODE` | `true` = may run code in the sandbox: analyses, charts and documents (Word, Excel, PowerPoint, PDF, CSV) that appear in the chat with preview and download (only with `CODE_INTERPRETER=true`) |
 | `AGENT_ID` | image agents only: ID from LibreChat (`agent_…`) |

@@ -1,6 +1,6 @@
 # KIRA – security review
 
-Review of the KIRA stack package (stacks `caddy`, `kira`, `bifrost`, `websearch`, `onyx`, `codeinterpreter`) as of
+Review of the KIRA stack package (stacks `caddy`, `kira`, `bifrost`, `websearch`, `onyx`, `codeinterpreter`, `docs`) as of
 **27.11.2026**, versions LibreChat v0.8.9, Bifrost v2.6, Firecrawl 2.11, code interpreter v1.9.1. Checked: code,
 scripts, generated configuration and the network rules (firewall rules tested with real traffic in network
 namespaces). Not checked: the running server, Keycloak, the hypervisor, the upstream proxy – see "Outside the package".
@@ -128,6 +128,24 @@ Tested with real traffic (network namespaces, iptables as on the server):
 - Files in its storage (MinIO) are deleted after 2 days (lifecycle rule set by `setup.sh`); results are stored in
   LibreChat and deleted with the chat (`CHAT_RETENTION`).
 
+### Documents per agent (optional)
+
+- One Onyx document set per agent (`kira-<agent>`); the free Onyx edition cannot restrict them to groups, so KIRA
+  enforces the separation itself: each agent has its own MCP entry `docs-<agent>` (agent name fixed in the
+  configuration, not chosen by the model); `docs-search` checks a shared key, refuses own agents (`X-Agent-Id` is set
+  for stored agents) and checks the user's role (`{{LIBRECHAT_USER_ROLE}}`) against `config/docs-agents.json`.
+  The Onyx MCP server ("intranet", whole index) is not configured while the document search is on.
+- Downloads: Caddy removes `X-Auth-Request-*` from the browser, asks the login service (oauth2-proxy, Keycloak client
+  `kira-docs`, PKCE, cookie `__Secure-`, path `/dokumente`) and copies only e-mail and groups; `docs-download` checks
+  the groups like LibreChat (group with the most agents wins, admins all), answers 404 for everything else, never
+  serves `_vorlagen`, refuses paths outside the agent's folder, delivers non-PDF/image files only as attachment with
+  `nosniff` and images with `CSP: sandbox`. Tested: forged headers without a session end at the login.
+- Networks: `docs-sync` reaches only the NAS ip:445 (chain `KIRA-EGRESS-DOCS`, no internet, no DNS), `docs-login`
+  only Keycloak (like LibreChat), `docs-search` and `docs-download` have no external access; `docs-download` reads the
+  copy read-only. Containers `read_only`, `no-new-privileges`, `cap_drop: ALL`, memory and process limits, uid 10001.
+- The NAS account only reads; secrets in `/opt/docs/env/` (600). Download log (e-mail, file) only if switched on, with
+  daily deletion after the configured days.
+
 ### Secrets
 
 - Only in `env/` of each stack (folders 700, files 600); generated with `openssl rand`; not in the package, not in
@@ -169,6 +187,8 @@ Tested with real traffic (network namespaces, iptables as on the server):
 7. **Host services:** the LAN block now also drops new connections from the internal networks to the host.
 8. **Office download links removed:** documents come from the code interpreter and stay in LibreChat – no files
    reachable by link without login.
+9. **Documents per agent (27.11.2026):** new stack `docs` with the separation above; the Onyx MCP server with access to
+   the whole index is switched off while it is active.
 
 ## Accepted residual risks
 
@@ -185,6 +205,10 @@ Tested with real traffic (network namespaces, iptables as on the server):
 | Code interpreter: MinIO image `quay.io/minio/minio` without version and no longer maintained as a community image | internal network only, own credentials; pin `MINIO_IMAGE` by digest after the first start |
 | Code interpreter: the Redis password is on the command line of `codeapi-redis` (project default) | visible only on the host (`docker inspect`); Redis is reachable only in its internal network |
 | Users can run any code in the sandbox (also via "Run code" on code blocks) | that is the feature; it runs isolated, with time, memory and parallel limits |
+| Documents: whoever sees an agent sees all files of its folder; NAS file permissions are not taken over | wanted (decision 27.11.2026); smaller circles get their own agent/folder |
+| Documents: with `CONFIDENTIAL=false` hits go to Claude/OpenAI and images to the image model; the Onyx search uses Onyx's LLM | data processing agreements; member data only after clarification with data protection; `CONFIDENTIAL=true` with the privacy guard for sensitive folders |
+| Documents: template skills are deployment skills, readable for every logged-in user via hand-made requests | only fixed agents list them; templates (letterheads) are not secret |
+| Documents: the login service refuses users whose e-mail is not verified | intended; Keycloak *Trust Email* for the Microsoft provider |
 
 ## Outside the package (recommended, not checkable from here)
 
@@ -204,6 +228,7 @@ bash /opt/kira/scripts/egress-firewall.sh status          # firewall rules
 python3 -c 'import json; print(json.load(open("/opt/bifrost/config/bifrost.json"))["client"]["allowed_origins"])'
 bash /opt/kira/scripts/user-check.sh <e-mail>             # role and agent list of a user
 bash /opt/codeinterpreter/codeapi.sh ps                   # code interpreter: no ports listed under PORTS
+docker exec docs-sync python -m kiradocs.sync --check     # documents: NAS readable (only ip:445 allowed)
 ss -tlnp | grep -E ':(80|443|8080) '                      # only Caddy (docker-proxy) listens
 ```
 

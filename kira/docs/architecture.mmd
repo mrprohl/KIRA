@@ -33,6 +33,12 @@ flowchart LR
     CI[<b>Code interpreter</b><br/>Python in a KVM sandbox<br/>Word, Excel, PowerPoint, PDF]
   end
 
+  subgraph docs["/opt/docs (optional)"]
+    DS[<b>docs-sync</b><br/>NAS folders → Onyx<br/>OCR, templates]
+    DQ[<b>docs-search</b><br/>search per agent]
+    DD[<b>docs-login + download</b><br/>originals after login]
+  end
+
   subgraph gpu["GPU servers in the LAN (optional)"]
     VL[<b>vLLM</b><br/>privacy and safety checker,<br/>local answers, embeddings]
   end
@@ -54,26 +60,37 @@ flowchart LR
   OX ==>|internet| SP([<b>SharePoint / Graph</b>])
   BF -.->|privacy guard| VL
   LC -->|run code, files into the chat| CI
+  LC -->|MCP: documents of the agent| DQ
+  DQ -->|document set of the agent| OX
+  DS -->|ingest| OX
+  DS -->|image model| BF
+  C -->|/dokumente/| DD
+  DS ==>|SMB, only ip:445| NAS([<b>NAS</b><br/>one folder per agent])
+  DD -.->|login| KC
 
   classDef ext fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A,stroke-width:1.5px
   classDef svc fill:#EEEDFE,stroke:#534AB7,color:#26215C,stroke-width:1.5px
   classDef data fill:#E1F5EE,stroke:#0F6E56,color:#04342C,stroke-width:1.5px
   classDef net fill:#FAECE7,stroke:#993C1D,color:#4A1B0C,stroke-width:1.5px
-  class U,EXT,KC ext
+  class U,EXT,KC,NAS ext
   class C,LC,ME,RAG,BF,SX,FC,OX svc
   class MO,VDB,BDB data
   class AI,WEB,SP net
   classDef opt fill:#FAEEDA,stroke:#854F0B,color:#412402,stroke-width:1.5px,stroke-dasharray:5 4
-  class VL,CI opt
+  class VL,CI,DS,DQ,DD opt
   style caddy fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style kira fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style bifrost fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style websearch fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style onyx fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
   style code fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
+  style docs fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
   style gpu fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
   linkStyle default stroke:#5F5E5A,stroke-width:1.6px
   linkStyle 17,18,19,20 stroke:#993C1D,stroke-width:3px
   linkStyle 16 stroke:#5F5E5A,stroke-width:1.6px,stroke-dasharray:6 5
   linkStyle 21 stroke:#854F0B,stroke-width:2px,stroke-dasharray:6 5
   linkStyle 22 stroke:#854F0B,stroke-width:2px
+  linkStyle 23,24,25,26,27 stroke:#854F0B,stroke-width:2px
+  linkStyle 28 stroke:#993C1D,stroke-width:3px
+  linkStyle 29 stroke:#854F0B,stroke-width:1.6px,stroke-dasharray:6 5

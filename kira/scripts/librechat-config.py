@@ -2,8 +2,10 @@
 # ============================================================================
 # librechat-config.py – generates /opt/kira/config/librechat.yaml from
 #   env/setup.env      switches (Onyx, user headers, images, speech, agent builder, ...)
-#   env/librechat.env  only: is ONYX_API_KEY set?
+#   env/librechat.env  only: are ONYX_API_KEY / DOCS_SEARCH_KEY / the code interpreter set?
 #   agents/*.env/.md   agents (model specs), agents/groups.env (agents per Keycloak group)
+# Also writes config/agent-groups.json (agent-groups.sh) and config/docs-agents.json (stack docs: which agent has
+# documents/templates and who may see them).
 # Called by setup.sh, scripts/agent-builder.sh and scripts/agent-groups.sh – manually:
 #   python3 /opt/kira/scripts/librechat-config.py
 # Python standard library only. Do not edit the generated YAML by hand – it is overwritten.
@@ -19,7 +21,9 @@ CONFIG_VERSION = "1.3.19"          # matches LibreChat v0.8.9
 ENDPOINT = "Bifrost"               # name of the custom endpoint (invisible to users)
 # Claude models get prompt caching (top-level cache_control). Bifrost passes it on unchanged to OpenAI, which
 # would reject the request – so models of other providers run on their own endpoints without it.
-PROVIDER_LABELS = {"anthropic": "Anthropic", "openai": "OpenAI"}
+PROVIDER_LABELS = {"anthropic": "Anthropic", "openai": "OpenAI", "vllm": "Lokal"}
+# CONFIDENTIAL=true: answers and titles from the local answer model of the privacy guard (vLLM, kira/PRIVACY-GUARD.md)
+LOCAL_MODEL = "vllm/kira-answer"
 BIFROST_JSON = os.environ.get("BIFROST_JSON", "/opt/bifrost/config/bifrost.json")
 TITLE_MODEL = "anthropic/claude-haiku-5-5"
 TITLE_ALIAS = "kira/title"                          # with the privacy guard (title_alias in bifrost.json)
@@ -32,6 +36,17 @@ CODE_PROMPT = ("Code-Ausführung und Dokumente: Für Berechnungen, Auswertungen 
                "Dateinamen (z. B. Protokoll_2026-11-27.docx), deutsche Datums- und Zahlenformate und eine saubere "
                "Gestaltung (Überschriften, Tabellen mit Kopfzeile). Hat der Nutzer eine Vorlage hochgeladen, nutze "
                "sie als Grundlage (Word z. B. mit docxtpl). Fasse danach kurz zusammen, was die Datei enthält.")
+# added to the instruction of agents with DOCS=true (documents from their NAS folder, stack docs)
+DOCS_PROMPT = ("Dokumente: Zu diesem Agenten gehören interne Dokumente (Werkzeug „dokumente_suchen“). Durchsuche sie bei "
+               "Fragen zu internen Unterlagen, Regeln, Abläufen und Zuständigkeiten, bevor du antwortest. Stütze die "
+               "Antwort auf die Fundstellen, gib jede genutzte Quelle als Markdown-Link mit ihrem Titel (und der Seite, "
+               "falls angegeben) an und sage offen, wenn nichts Passendes gefunden wurde. Bei Fundstellen mit dem "
+               "Hinweis „Automatisch übertragen“ weise auf mögliche Lesefehler hin.")
+# added to the instruction of agents with TEMPLATES=true (skill vorlagen-<name> from <name>/_vorlagen, stack docs)
+TEMPLATES_PROMPT = ("Vorlagen: Für Briefe und Dokumente im Hausstil gibt es die Skill „vorlagen-{name}“. Lade sie, "
+                    "wenn der Nutzer ein Schreiben oder Dokument als Datei möchte, und erstelle die Datei damit in der "
+                    "Code-Ausführung.")
+DOCS_SEARCH_URL = "http://docs-search:8095/mcp"
 # image agent (stored agent): own endpoint, so that builders (own agents) can use it without getting "Bifrost"
 IMAGE_ENDPOINT = "Bild-Agent"
 IMAGE_AGENT_MODEL = "anthropic/claude-haiku-5-5"   # only writes the image description
@@ -259,7 +274,8 @@ def icon_data_uri(agents_dir, value, where):
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 
 
-def load_agents(setup, onyx_ready, compact_at=None):
+def load_agents(setup, onyx_ready, compact_at=None, docs=None):
+    """docs: {} to collect the agents with documents/templates (stack docs) – None = stack docs off."""
     agents_dir = os.path.join(KIRA_DIR, "agents")
     files = sorted(f for f in os.listdir(agents_dir) if f.endswith(".env") and f != "groups.env")
     specs, models, notes, names = [], [], [], set()
@@ -285,6 +301,9 @@ def load_agents(setup, onyx_ready, compact_at=None):
                 prompt = fh.read().replace("\r\n", "\n").replace("\t", "    ").strip()
         is_image = is_yes(a.get("IMAGES"), "IMAGES", where)
         is_intranet = is_yes(a.get("INTRANET"), "INTRANET", where)
+        want_docs = is_yes(a.get("DOCS", "false"), "DOCS", where)
+        want_templates = is_yes(a.get("TEMPLATES", "false"), "TEMPLATES", where)
+        confidential = is_yes(a.get("CONFIDENTIAL", "false"), "CONFIDENTIAL", where)
         # code interpreter (also documents): only if switched on in setup.sh, otherwise silently without
         with_code = is_yes(a.get("CODE", "false"), "CODE", where) and setup.get("_code_ready", False)
         if with_code:
@@ -315,6 +334,14 @@ def load_agents(setup, onyx_ready, compact_at=None):
             specs.append(spec)
             continue
 
+        if is_intranet and docs is not None:
+            # the Onyx MCP server searches ALL of Onyx – with the stack docs that includes every agent's folder,
+            # so it is replaced by the agent's own folder (DOCS=true)
+            is_intranet = False
+            if not want_docs:
+                notes.append(f"{where}: skipped – with the document search (DOCS_ENABLED) INTRANET=true needs "
+                             "DOCS=true (the Onyx MCP server would see every agent's folder)")
+                continue
         if is_intranet and not onyx_ready:
             notes.append(f"{where}: skipped – Onyx is off or ONYX_API_KEY is missing in env/librechat.env")
             continue
@@ -323,6 +350,34 @@ def load_agents(setup, onyx_ready, compact_at=None):
         if not MODEL_RE.match(model):
             fail(f"{where}: MODEL={model!r} – Bifrost model ID with provider, e.g. anthropic/claude-sonnet-5-5.")
         check_allowed(model, where)
+        if confidential:
+            # confidential: always the local model – there is none without the privacy guard (vLLM servers)
+            if not setup["PRIVACY_GUARD"]:
+                fail(f"{where}: CONFIDENTIAL=true needs a local model – it comes with the privacy guard "
+                     "(PRIVACY_GUARD=true, kira/PRIVACY-GUARD.md). Until then set CONFIDENTIAL=false.")
+            model = LOCAL_MODEL
+            check_allowed(model, where)
+            notes.append(f"{where}: CONFIDENTIAL – answers and titles from {LOCAL_MODEL}"
+                         + (" (web search still sends search terms to the internet)"
+                            if is_yes(a.get("WEB_SEARCH"), "WEB_SEARCH", where) else ""))
+        uses_docs = want_docs and docs is not None
+        if want_docs and docs is None:
+            notes.append(f"{where}: DOCS=true without effect – document search is off (DOCS_ENABLED) or "
+                         "DOCS_SEARCH_KEY is missing")
+        uses_templates = want_templates and docs is not None and with_code
+        if want_templates and not uses_templates:
+            notes.append(f"{where}: TEMPLATES=true without effect – needs the document search (DOCS_ENABLED) and "
+                         "code execution (CODE=true, CODE_INTERPRETER=true)")
+        if uses_docs:
+            prompt = (prompt + "\n\n" if prompt else "") + DOCS_PROMPT
+        if uses_templates:
+            prompt = (prompt + "\n\n" if prompt else "") + TEMPLATES_PROMPT.format(name=name)
+        if uses_docs and confidential:
+            notes.append(f"{where}: CONFIDENTIAL with DOCS – the Onyx search uses the LLM configured in Onyx; set it "
+                         "to the local model there (docs/README.md)")
+        if uses_docs or uses_templates:
+            docs[name] = {"label": title, "docs": uses_docs, "templates": uses_templates,
+                          "confidential": confidential}
         if model not in models:
             models.append(model)
         preset = {"endpoint": fixed_endpoint_name(model), "model": model}
@@ -345,7 +400,10 @@ def load_agents(setup, onyx_ready, compact_at=None):
         spec["webSearch"] = is_yes(a.get("WEB_SEARCH"), "WEB_SEARCH", where)
         spec["fileSearch"] = is_yes(a.get("FILE_SEARCH"), "FILE_SEARCH", where)
         spec["executeCode"] = with_code
-        spec["mcpServers"] = ["intranet"] if is_intranet else []
+        spec["mcpServers"] = (["intranet"] if is_intranet else []) + ([f"docs-{name}"] if uses_docs else [])
+        if docs is not None:
+            # skills: only the agent's own template skill; false = hard off (the request cannot switch it on)
+            spec["skills"] = [f"vorlagen-{name}"] if uses_templates else False
         spec["hideBadgeRow"] = True
         specs.append(spec)
 
@@ -551,6 +609,7 @@ def main():
         "AGENT_GROUPS": is_yes(s.get("AGENT_GROUPS", "false"), "AGENT_GROUPS", where),
         "UPLOAD_OFFICE_ONLY": is_yes(s.get("UPLOAD_OFFICE_ONLY", "false"), "UPLOAD_OFFICE_ONLY", where),
         "PRIVACY_GUARD": is_yes(s.get("PRIVACY_GUARD", "false"), "PRIVACY_GUARD", where),
+        "DOCS_ENABLED": is_yes(s.get("DOCS_ENABLED", "false"), "DOCS_ENABLED", where),
     }
     chat_retention = hours(s.get("CHAT_RETENTION"), "CHAT_RETENTION", where, 24, 8760)
     temp_retention = hours(s.get("TEMP_CHAT_RETENTION"), "TEMP_CHAT_RETENTION", where, 1, 8760, 24)
@@ -565,7 +624,13 @@ def main():
     compact_at = number(s.get("COMPACT_AT"), "COMPACT_AT", where, 0, 1000000, 100000)
     if 0 < compact_at < 20000:
         fail(f"{where}: COMPACT_AT={compact_at} – 0 or at least 20000.")
-    specs, models, notes = load_agents(setup, onyx_ready, compact_at)
+    # document search per agent (stack docs): needs Onyx and the key between LibreChat and docs-search
+    docs_ready = setup["DOCS_ENABLED"] and setup["ONYX_ENABLED"] and bool(lc.get("DOCS_SEARCH_KEY"))
+    docs = {} if docs_ready else None
+    specs, models, notes = load_agents(setup, onyx_ready, compact_at, docs)
+    if setup["DOCS_ENABLED"] and not docs_ready:
+        notes.append("DOCS_ENABLED=true, but Onyx is off or DOCS_SEARCH_KEY is missing in env/librechat.env – "
+                     "documents and templates are off (setup.sh)")
     if TITLE_MODEL not in models:
         models.append(TITLE_MODEL)
     builder = setup["AGENT_BUILDER"]
@@ -608,7 +673,10 @@ def main():
     # fixed agents of other providers (e.g. MODEL=openai/gpt-6.1-sol): one endpoint per provider
     for prov in sorted({provider_of(m) for m in models} - {"anthropic"}):
         ep_models = [m for m in models if provider_of(m) == prov]
-        custom.append(variant(fixed_endpoint_name(ep_models[0]), ep_models))
+        ep = variant(fixed_endpoint_name(ep_models[0]), ep_models)
+        if prov == "vllm":
+            ep["titleModel"] = LOCAL_MODEL         # CONFIDENTIAL agents: titles local as well
+        custom.append(ep)
     extra_endpoints = []          # (name, models) – image agent and builder providers
     if setup["IMAGE_GENERATION"]:
         extra_endpoints.append((IMAGE_ENDPOINT, [IMAGE_AGENT_MODEL]))
@@ -624,8 +692,12 @@ def main():
                 prompt, completion = LIBRECHAT_RATES.get(mod.split("/", 1)[1], (0, 0))
                 ep["tokenConfig"][mod] = {"prompt": prompt, "completion": completion, "context": compact_at}
         custom.append(ep)
+    with_templates = bool(docs) and any(d["templates"] for d in docs.values())
     agents_endpoint = {"capabilities": ["file_search", "web_search", "artifacts", "tools", "context"]
-                       + (["execute_code"] if setup.get("_code_ready") else [])}
+                       + (["execute_code"] if setup.get("_code_ready") else [])
+                       # template skills (deployment skills from /opt/docs/skills/live): only agents with
+                       # TEMPLATES=true list theirs, all others have skills: false
+                       + (["skills"] if with_templates else [])}
     if not builder:
         # agent builder only for builders (per-user profile from scripts/builder-sync.py) – hidden for everyone else
         agents_endpoint["disableBuilder"] = True
@@ -794,16 +866,33 @@ def main():
     if "textToSpeech" not in tab:
         tab["textToSpeech"] = False
 
-    if onyx_ready:
-        cfg["mcpServers"] = {
-            "intranet": {
-                "type": "streamable-http",
-                "url": "http://onyx-mcp:8090/",
-                "headers": {"Authorization": "Bearer ${ONYX_API_KEY}"},
-                "timeout": 60000,
-            }
+    mcp, allowed = {}, []
+    if onyx_ready and any("intranet" in sp.get("mcpServers", []) for sp in specs):
+        mcp["intranet"] = {
+            "type": "streamable-http",
+            "url": "http://onyx-mcp:8090/",
+            "headers": {"Authorization": "Bearer ${ONYX_API_KEY}"},
+            "timeout": 60000,
         }
-        cfg["mcpSettings"] = {"allowedAddresses": ["onyx-mcp:8090"]}
+        allowed.append("onyx-mcp:8090")
+    for name, d in sorted((docs or {}).items()):
+        if not d["docs"]:
+            continue
+        # one entry per agent: the agent name is fixed here (not chosen by the model); docs-search also checks the
+        # user's role and refuses own agents (X-Agent-Id is only set for stored agents)
+        mcp[f"docs-{name}"] = {
+            "type": "streamable-http",
+            "url": DOCS_SEARCH_URL,
+            "headers": {"Authorization": "Bearer ${DOCS_SEARCH_KEY}", "X-Kira-Agent": name,
+                        "X-Agent-Id": "{{LIBRECHAT_AGENT_ID}}", "X-Kira-Role": "{{LIBRECHAT_USER_ROLE}}",
+                        "X-Kira-User": "{{LIBRECHAT_USER_EMAIL}}"},
+            "timeout": 60000,
+        }
+        if "docs-search:8095" not in allowed:
+            allowed.append("docs-search:8095")
+    if mcp:
+        cfg["mcpServers"] = mcp
+        cfg["mcpSettings"] = {"allowedAddresses": allowed}
 
     header = [
         "# ============================================================================",
@@ -845,6 +934,13 @@ def main():
         notes.append("agent builder is ON – the model groups' limits only apply again after agent-builder.sh off")
     write_json(os.path.join(KIRA_DIR, "config", "agent-groups.json"), plan)
 
+    # stack docs: which agent has documents/templates, who may see them (docs-search, docs-download, docs-sync)
+    write_json(os.path.join(KIRA_DIR, "config", "docs-agents.json"), {
+        "agents": docs or {},
+        "access": {"agent_groups": plan["enabled"], "admin_group": plan.get("admin_group", ""),
+                   "groups": {g: [i["name"] for i in lst] for g, lst in (plan.get("roles") or {}).items()},
+                   "priority": plan.get("priority", [])}})
+
     print(f"config/librechat.yaml generated: {len(specs)} agents ({', '.join(x['label'] for x in specs)}).")
     if plan["enabled"]:
         labels = {sp["name"]: sp["label"] for sp in specs}
@@ -858,6 +954,9 @@ def main():
             print(f"    Model group {g}: {', '.join(b['models'])}")
         for name, mods in plan["builder_endpoints"].items():
             print(f"  Agent builder, provider \"{name}\": {', '.join(mods)} (each user sees only the models of their groups)")
+    if docs:
+        print("  Documents: " + ", ".join(f"{n}{' + templates' if d['templates'] else ''}"
+                                         if d["docs"] else f"{n} (templates only)" for n, d in sorted(docs.items())))
     for note in notes:
         print(f"  Note: {note}")
     if builder:

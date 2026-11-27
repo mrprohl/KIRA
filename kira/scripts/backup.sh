@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================================
 # backup.sh – daily via cron (/etc/cron.d/kira), can also be run by hand:
-#   Bifrost DB, LibreChat MongoDB, RAG vector database, Onyx DB (if active), LibreChat uploads/images and
-#   /opt/{caddy,bifrost,kira,websearch,onyx,codeinterpreter} (incl. env/ – secrets!; without the code interpreter
+#   Bifrost DB, LibreChat MongoDB, RAG vector database, Onyx DB (if active), LibreChat uploads/images, the state of
+#   the document sync (transcriptions – saves model calls) and the download log (if active) and
+#   /opt/{caddy,bifrost,kira,websearch,onyx,codeinterpreter,docs} (incl. env/ – secrets!; without the code interpreter
 #   sources) to $BACKUP_DIR/<date_time>/, kept for $BACKUP_KEEP_DAYS days.
 #   Result -> Uptime Kuma (push monitor "KIRA Backup"), errors also -> Slack.
 # Not backed up (rebuilt automatically): Meilisearch index, Onyx OpenSearch index, Firecrawl queues, code interpreter
-# sources and its temporary files (results are stored in LibreChat).
+# sources and its temporary files (results are stored in LibreChat), the copy of the NAS files (docs-sync fetches it
+# again).
 # Restore: README, section "Operations".
 # ============================================================================
 set -euo pipefail
@@ -54,9 +56,17 @@ if [ "$ONYX_ENABLED" = "true" ]; then
   [ -s "$target/onyx.dump" ] || fail "Dump Onyx ist leer"
 fi
 
+# --- documents: state of the sync (incl. transcriptions) and download log ---
+if [ "${DOCS_ENABLED:-}" = "true" ] && [ "$(docker inspect -f '{{.State.Running}}' docs-sync 2>/dev/null)" = "true" ]; then
+  docker exec docs-sync python -c 'import sqlite3, sys; s = sqlite3.connect("/data/state.db"); d = sqlite3.connect("/tmp/state.db"); s.backup(d); d.close()'
+  docker cp docs-sync:/tmp/state.db - | gzip > "$target/docs-state.tar.gz"
+  docker exec docs-sync rm -f /tmp/state.db
+  docker cp docs-download:/logs - 2>/dev/null | gzip > "$target/docs-logs.tar.gz" || true
+fi
+
 # --- stack folders incl. secrets ---
 dirs=()
-for d in caddy bifrost kira websearch onyx codeinterpreter; do [ -d "/opt/$d" ] && dirs+=("$d"); done
+for d in caddy bifrost kira websearch onyx codeinterpreter docs; do [ -d "/opt/$d" ] && dirs+=("$d"); done
 tar czf "$target/opt-stacks.tgz" --exclude=codeinterpreter/src -C /opt "${dirs[@]}"
 
 trap - ERR

@@ -45,6 +45,14 @@ Only if Onyx is used:
 Only if the code interpreter is used:
 - [ ] additionally **2 GB RAM per parallel run** (default 4 → 8 GB) plus 2 GB for its services, and **30 GB disk**
 
+Only if the documents per agent are used (`docs/README.md`, needs Onyx):
+- [ ] NAS share (e.g. `kira-docs`) with one folder per agent (`writing`, `intranet`), templates in
+      `writing\_vorlagen`; an account with **read access only** (SMB 2 or 3), its password, Windows domain if any
+- [ ] firewall of the NAS: port 445 from <KIRA-IP>
+- [ ] Keycloak client **`kira-docs`** created as in `docs/README.md` (section "Keycloak client"), client secret ready
+- [ ] budget in USD for transcribing handwriting and photos per day / month; download log yes/no and retention (90 days)
+- [ ] about 1 GB disk per agent for the copy of the files plus the index in Onyx
+
 **Checkpoint:** everything ticked.
 
 ---
@@ -79,7 +87,7 @@ docker compose version || curl -fsSL https://get.docker.com | sh   # Docker Engi
 ls -l /dev/kvm                                          # only for the code interpreter: must exist
 cd /root && unzip -o kira-stack.zip -d /opt             # extract directly on the server, not on Windows
 umask 077; scp root@<KEYCLOAK-IP>:/opt/keycloak/env/kira-client-kira.env /opt/kira/env/keycloak-client.env
-ls /opt                                                 # caddy bifrost kira websearch onyx codeinterpreter vllm
+ls /opt                                                 # caddy bifrost kira websearch onyx codeinterpreter docs vllm
 ```
 
 **Moving from the old server:** run `/opt/kira/scripts/backup.sh` there and copy the backup folder
@@ -108,6 +116,7 @@ Answers for this server:
 | internal IP of the Keycloak server | `<KEYCLOAK-IP>` |
 | Onyx / images / speech | as decided in step 1; speech output e.g. `gpt-4o-mini-tts`, leave the default voice empty (= `fable`) |
 | Code interpreter? | as decided in step 1; parallel runs empty = `4` |
+| Document search per agent? | as decided in step 1 (only offered with Onyx); NAS address, share, domain, account and password, more excluded folders (empty), image model `yes` with its budget, download log `yes` / empty = 90 days, client secret of `kira-docs`; **Onyx admin and search API key empty** (they come in step 8d) |
 | Privacy guard? | as decided in step 1; with `yes`: the four vLLM addresses from step 1b, mode `observe`, Slack counts `yes`; vLLM API key empty = generate |
 | Restrict agents per Keycloak group? | `yes` if the groups are set up in Keycloak – mapper `groups`, default group `kira-users-default` under *Realm settings* → *User registration* → *Default groups* (README, section "Agents per Keycloak group"), otherwise `no` |
 | How long does a login stay active? | empty = `30d` (possible `8h` to `365d`) |
@@ -271,6 +280,29 @@ In KIRA (agent **KIRA**):
 3. Upload a CSV, "Zeichne ein Diagramm der Werte" → chart in the chat.
 
 **Checkpoint:** self-test section "Code interpreter" OK, all three files open.
+
+---
+
+## Step 8d – Documents per agent (only if enabled)
+
+1. Onyx admin area → API Keys: one key with role **Admin** (document sync) and one with role **Basic** (search), then
+   `bash /opt/kira/setup.sh` – it asks for both (search empty = the key of LibreChat), start with `yes`.
+2. Checks:
+
+```bash
+docker exec docs-sync python -m kiradocs.sync --check      # NAS readable, folders writing/intranet/… "ok"
+docker exec docs-sync python -m kiradocs.sync --estimate   # pages/images for the image model (cost estimate)
+docker logs -f docs-sync                                   # first pass – "indexed (…)" per file
+bash /opt/kira/scripts/self-test.sh                        # section "Documents"
+```
+
+3. In KIRA (agent **Textwerkstatt**): ask about one of the documents in `writing` → the answer names the source as a
+   link; click it → Keycloak login (usually without input) → the file opens or downloads. With a user who does not see
+   the agent the link answers "Nicht gefunden".
+4. Templates: "Schreib dem Betrieb Müller eine Erinnerung als Brief" – the template skill is active after the nightly
+   restart, at once with `bash /opt/kira/scripts/templates-reload.sh`.
+
+**Checkpoint:** self-test section "Documents" OK, source link and download work, the template letter appears as `.docx`.
 
 ---
 

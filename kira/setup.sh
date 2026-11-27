@@ -2,7 +2,7 @@
 # ============================================================================
 # KIRA – central setup for all stacks under /opt:
 #   caddy (reverse proxy) · bifrost (LLM gateway) · kira (LibreChat) · websearch (SearXNG, Firecrawl) · onyx (optional)
-#   · codeinterpreter (optional, needs /dev/kvm)
+#   · codeinterpreter (optional, needs /dev/kvm) · docs (optional: documents per agent from the NAS, needs Onyx)
 #
 #   Usage:  bash /opt/kira/setup.sh
 #
@@ -20,7 +20,9 @@ BIFROST=/opt/bifrost
 WEBSEARCH=/opt/websearch
 ONYX=/opt/onyx
 CODEI=/opt/codeinterpreter
-STACK_DIRS=("$CADDY" "$BIFROST" "$KIRA" "$WEBSEARCH" "$ONYX" "$CODEI")
+DOCS=/opt/docs
+STACK_DIRS=("$CADDY" "$BIFROST" "$KIRA" "$WEBSEARCH" "$ONYX" "$CODEI" "$DOCS")
+DOCS_UID=10001                               # user of the document services (docs/app/Dockerfile)
 SETUP_ENV=$KIRA/env/setup.env
 EMBEDDING_MODEL=text-embedding-3-small      # OpenAI embedding model for document search (via Bifrost)
 
@@ -245,12 +247,12 @@ info "Docker $(docker version -f '{{.Server.Version}}'), Compose $compose_versio
 # Files from Windows: strip line endings (CRLF), set permissions for Linux/Docker
 # (not in codeinterpreter/src – the cloned sources keep their own line endings and permissions)
 for d in "${STACK_DIRS[@]}"; do
-  find "$d" -path "$CODEI/src" -prune -o -type f \( -name '*.sh' -o -name '*.py' -o -name '*.js' -o -name '*.yml' -o -name '*.yaml' -o -name '*.env' \
+  find "$d" \( -path "$CODEI/src" -o -path "$DOCS/skills" \) -prune -o -type f \( -name '*.sh' -o -name '*.py' -o -name '*.js' -o -name '*.yml' -o -name '*.yaml' -o -name '*.env' \
        -o -name '*.example' -o -name '*.md' -o -name '*.json' -o -name '*.caddy' -o -name '*.off' -o -name 'Caddyfile' \
        -o -name '*.template' -o -name '*.conf' \) -exec sed -i 's/\r$//' {} +
   # skip env/ (secrets) – stays 700/600
-  find "$d" \( -path "$d/env" -o -path "$CODEI/src" \) -prune -o -type d -exec chmod 755 {} +
-  find "$d" \( -path "$d/env" -o -path "$CODEI/src" \) -prune -o -type f -exec chmod 644 {} +
+  find "$d" \( -path "$d/env" -o -path "$CODEI/src" -o -path "$DOCS/skills" \) -prune -o -type d -exec chmod 755 {} +
+  find "$d" \( -path "$d/env" -o -path "$CODEI/src" -o -path "$DOCS/skills" \) -prune -o -type f -exec chmod 644 {} +
   if [ -d "$d/env" ]; then chmod 700 "$d/env"; find "$d/env" -type f -exec chmod 600 {} +; fi
 done
 chmod 755 "$KIRA/setup.sh" "$KIRA"/scripts/*.sh "$KIRA"/scripts/*.py "$BIFROST"/db/init/*.sh "$ONYX"/nginx/run-nginx.sh \
@@ -277,6 +279,12 @@ if is_true ONYX_ENABLED; then
   ensure_text ONYX_DOMAIN "Domain for the Onyx web interface (admin area, e.g. onyx.example.com)" "$DOMAIN_RE"
   # Onyx has its own accounts with open sign-up (the first account becomes admin) – only admins may reach it
   ensure_text ONYX_ALLOWED_IPS "Allowed IPs for the Onyx web interface (admins only, space-separated)" "$IPLIST_RE"
+fi
+if is_true ONYX_ENABLED; then
+  ensure_yesno DOCS_ENABLED "Document search per agent: each agent with DOCS=true searches its own folder on a NAS (SMB), templates and links to the originals (docs/README.md)?"
+else
+  setup_has DOCS_ENABLED || setup_set DOCS_ENABLED false
+  is_true DOCS_ENABLED && die "DOCS_ENABLED=true needs Onyx (ONYX_ENABLED=true) – set one of them in $SETUP_ENV and run setup.sh again."
 fi
 ensure_yesno IMAGE_GENERATION "Enable image generation (image agent, agents/40-images.env)?"
 if is_true IMAGE_GENERATION; then
@@ -365,6 +373,33 @@ if [ -n "$(setup_get BIFROST_UI_DOMAIN)" ]; then
   ensure_text BIFROST_UI_ALLOWED_IPS "Allowed IPs for the Bifrost web interface (space-separated)" "$IPLIST_RE"
 fi
 setup_has AGENT_BUILDER || setup_set AGENT_BUILDER false
+
+if is_true DOCS_ENABLED; then
+  section "Documents (stack docs)"
+  info "NAS share with one folder per agent (folder name = NAME of the agent, e.g. writing); read-only account, SMB 2 or 3."
+  ensure_text DOCS_NAS_HOST "NAS address (name or IP, e.g. nas.example.local or 10.0.0.20)" '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' "Host name or IPv4 address only."
+  ensure_text DOCS_NAS_SHARE "Share name (e.g. kira-docs)" '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$' "Letters, digits, space . _ - only."
+  ensure_optional DOCS_NAS_DOMAIN "Windows domain of the account (empty = local NAS account)" '^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$'
+  ensure_text DOCS_NAS_USER "Account with read access to the share" '^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$' "Letters, digits, . _ @ - only."
+  ensure_optional DOCS_EXCLUDE "More sub-folders to skip, comma-separated (always skipped: _vorlagen, _archiv; empty = none)" '^[^,]+(,[^,]+)*$'
+  ensure_yesno DOCS_VISION "Transcribe handwriting, photos and poor scans with the image model via Bifrost (one model call per page; with PRIVACY_GUARD=false the images go to the model provider)?"
+  if is_true DOCS_VISION; then
+    for b in 1D:day 1M:month; do
+      key=DOCS_BUDGET_${b%%:*}
+      if ! setup_has "$key" || [ -z "$(setup_get "$key")" ]; then
+        ask_number val "Budget of the document sync (image model, own Bifrost key vk-docs) in USD per ${b##*:}"
+        setup_set "$key" "$val"
+      fi
+    done
+  fi
+  ensure_yesno DOCS_DOWNLOAD_LOG "Log downloads of original files (time, user e-mail, agent, file, result)?"
+  if is_true DOCS_DOWNLOAD_LOG; then
+    ensure_days DOCS_DOWNLOAD_LOG_DAYS "Keep the download log for … (1d to 3650d; empty = 90d)" 1 3650
+  fi
+  setup_has DOCS_CLIENT_ID || setup_set DOCS_CLIENT_ID kira-docs
+  setup_has DOCS_VISION_MODEL || setup_set DOCS_VISION_MODEL anthropic/claude-sonnet-5-5
+  setup_has DOCS_VISION_LOCAL_MODEL || setup_set DOCS_VISION_LOCAL_MODEL ""
+fi
 
 if is_true CODE_INTERPRETER; then
   [ -c /dev/kvm ] || die "CODE_INTERPRETER=true needs /dev/kvm – this server has no hardware virtualisation (in a VM: enable
@@ -457,6 +492,12 @@ EOF
 fi
 VK_LIBRECHAT=$(env_get "$BIFROST/env/bifrost.env" VK_LIBRECHAT)
 [ -n "$VK_LIBRECHAT" ] || die "VK_LIBRECHAT is missing in $BIFROST/env/bifrost.env."
+# document sync (stack docs): own virtual key for the image model, budget per day/month (vk-docs in bifrost.json)
+if is_true DOCS_ENABLED && is_true DOCS_VISION && [ -z "$(env_get "$BIFROST/env/bifrost.env" VK_DOCS)" ]; then
+  env_set "$BIFROST/env/bifrost.env" VK_DOCS "sk-bf-$(random_hex 24)"
+  info "Virtual key VK_DOCS (document sync) added to bifrost/env/bifrost.env."
+fi
+VK_DOCS=$(env_get "$BIFROST/env/bifrost.env" VK_DOCS)
 if is_true PRIVACY_GUARD && [ -z "$(env_get "$BIFROST/env/bifrost.env" VLLM_API_KEY)" ]; then
   info "Privacy guard: API key of the vLLM servers (vllm serve … --api-key <key>, the same on all of them)."
   ask_optional VLLM_KEY "vLLM API key (empty = generate one now)" secret
@@ -587,6 +628,9 @@ ORIGINS=""
 [ -n "$(setup_get BIFROST_UI_DOMAIN)" ] && ORIGINS="https://$(setup_get BIFROST_UI_DOMAIN)"
 log_days=$(days_of "$(setup_get BIFROST_LOG_RETENTION)" 1 3650 || echo 90)
 GUARD_ON=false; is_true PRIVACY_GUARD && GUARD_ON=true
+DOCS_VK_ON=false; is_true DOCS_ENABLED && is_true DOCS_VISION && DOCS_VK_ON=true
+DOCS_VK_ON=$DOCS_VK_ON DOCS_B1D=$(setup_get DOCS_BUDGET_1D) DOCS_B1M=$(setup_get DOCS_BUDGET_1M) \
+DOCS_VISION_MODEL=$(setup_get DOCS_VISION_MODEL) DOCS_VISION_LOCAL_MODEL=$(setup_get DOCS_VISION_LOCAL_MODEL) \
 GUARD_ON=$GUARD_ON GUARD_MODE=$(setup_get GUARD_MODE) GUARD_PRIVACY_URL=$(setup_get GUARD_PRIVACY_URL) \
 GUARD_SAFETY_URL=$(setup_get GUARD_SAFETY_URL) GUARD_ANSWER_URL=$(setup_get GUARD_ANSWER_URL) \
 GUARD_EMBEDDING_URL=$(setup_get GUARD_EMBEDDING_URL) GUARD_TIMEOUT=$(setup_get GUARD_TIMEOUT) \
@@ -619,9 +663,35 @@ for vk in c.get("governance", {}).get("virtual_keys", []):
             for m in extra:
                 if m not in allowed:
                     allowed.append(m)
+E = os.environ
+# document sync (stack docs, DOCS_VISION): vk-docs only for the image model, budget per day and month from setup.env.
+# Switched off: key and budgets are removed.
+gov = c.setdefault("governance", {})
+vks = gov.setdefault("virtual_keys", [])
+gov["virtual_keys"] = vks = [v for v in vks if v.get("id") != "vk-docs"]
+gov["budgets"] = [b for b in gov.get("budgets", []) if b.get("virtual_key_id") != "vk-docs"]
+if E["DOCS_VK_ON"] == "true":
+    def split_model(m):
+        prov, _, name = m.partition("/")
+        return prov, name
+    pcs = {}
+    for m in [E["DOCS_VISION_MODEL"] or "anthropic/claude-sonnet-5-5", E["DOCS_VISION_LOCAL_MODEL"]]:
+        if m:
+            prov, name = split_model(m)
+            pcs.setdefault(prov, []).append(name)
+    if E["GUARD_ON"] == "true":      # the guard answers locally (kira-answer) – the key must be allowed to use it
+        pcs.setdefault("vllm", [])
+        if "kira-answer" not in pcs["vllm"]:
+            pcs["vllm"].append("kira-answer")
+    vks.append({"id": "vk-docs", "name": "docs", "description": "KIRA document sync (image model for scans)",
+                "value": "env.VK_DOCS", "is_active": True, "calendar_aligned": True,
+                "provider_configs": [{"provider": p, "weight": 1, "key_ids": ["*"], "allowed_models": ms}
+                                     for p, ms in pcs.items()]})
+    gov["budgets"] += [
+        {"id": "budget-docs-1d", "max_limit": float(E["DOCS_B1D"] or 5), "reset_duration": "1d", "virtual_key_id": "vk-docs"},
+        {"id": "budget-docs-1M", "max_limit": float(E["DOCS_B1M"] or 50), "reset_duration": "1M", "virtual_key_id": "vk-docs"}]
 # Privacy guard (kira/PRIVACY-GUARD.md): vLLM provider (local answers, embeddings), vk-librechat may use it, plugin.
 # Switched off: all three are removed again, Bifrost works as before.
-E = os.environ
 lc_vk = next((v for v in c.get("governance", {}).get("virtual_keys", []) if v.get("id") == "vk-librechat"), None)
 plugins = [x for x in c.get("plugins", []) if x.get("name") != "privacy-guard"]
 if E["GUARD_ON"] == "true":
@@ -646,7 +716,9 @@ if E["GUARD_ON"] == "true":
         "safety_url": E["GUARD_SAFETY_URL"].rstrip("/"), "safety_model": "kira-safety",
         "answer_model": "vllm/kira-answer",
         "title_alias": "kira/title", "title_model": "anthropic/claude-haiku-5-5",
-        "api_key_env": "VLLM_API_KEY", "guarded_key_envs": ["VK_LIBRECHAT"],
+        "api_key_env": "VLLM_API_KEY",
+        # the document sync's key is checked like the chats (images with personal data: local or not sent)
+        "guarded_key_envs": ["VK_LIBRECHAT"] + (["VK_DOCS"] if E["DOCS_VK_ON"] == "true" else []),
         "timeout_seconds": int(E["GUARD_TIMEOUT"] or 8),
         "block_categories": split(E["GUARD_BLOCK_CATEGORIES"],
             "Violent,Non-violent Illegal Acts,Sexual Content or Sexual Acts,Suicide & Self-Harm,Jailbreak"),
@@ -664,7 +736,7 @@ if json.dumps(c, sort_keys=True) != before:
     with open(p, "w", encoding="utf-8") as fh:
         json.dump(c, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
-    print("bifrost.json: logging switches, retention, models (embeddings/images/speech) and/or privacy guard updated.")
+    print("bifrost.json: logging switches, retention, models (embeddings/images/speech), document key and/or privacy guard updated.")
 PY
 chmod 644 "$BIFROST_JSON"
 HASH_BIFROST_AFTER=$(file_hash "$BIFROST_JSON")
@@ -828,6 +900,11 @@ if is_true ONYX_ENABLED && [ -z "$(env_get "$LC_ENV" ONYX_API_KEY)" ]; then
   [ -n "$ONYX_KEY" ] && env_set "$LC_ENV" ONYX_API_KEY "$ONYX_KEY" && info "ONYX_API_KEY stored."
   unset ONYX_KEY
 fi
+# Documents (stack docs): key between LibreChat and docs-search; template skills from /opt/docs/skills/live
+if is_true DOCS_ENABLED && [ -z "$(env_get "$LC_ENV" DOCS_SEARCH_KEY)" ]; then
+  env_set "$LC_ENV" DOCS_SEARCH_KEY "$(random_hex 32)"
+fi
+env_set "$LC_ENV" DEPLOYMENT_SKILLS_DIR /app/kira-skills
 
 ISSUER=$(env_get "$LC_ENV" OPENID_ISSUER)
 KC_HOST=$(printf '%s' "$ISSUER" | sed -E 's#^https://([^/:]+).*#\1#')
@@ -1028,6 +1105,122 @@ else
   [ -f "$ONYX/env/compose.env" ] || compose_env "$ONYX/env/compose.env"
 fi
 
+# ---------------------------------------------------------------- 6b. Documents (optional, stack docs)
+section "Documents (NAS folders per agent)"
+# the template skills folder is mounted into LibreChat in any case (empty without documents)
+umask 022; mkdir -p "$DOCS/skills/live"; umask 077
+chown "$DOCS_UID:$DOCS_UID" "$DOCS/skills" "$DOCS/skills/live"
+chmod 755 "$DOCS/skills" "$DOCS/skills/live"
+DOCS_IP=""
+if is_true DOCS_ENABLED; then
+  NAS_HOST=$(setup_get DOCS_NAS_HOST)
+  # the firewall allows exactly this IP:445 – resolved on every run (a changed DNS entry needs setup.sh again)
+  if [[ $NAS_HOST =~ $IPV4_RE ]]; then DOCS_IP=$NAS_HOST
+  else DOCS_IP=$( { getent ahostsv4 "$NAS_HOST" 2>/dev/null || true; } | awk '{print $1}' | head -1); fi
+  [ -n "$DOCS_IP" ] || die "NAS $NAS_HOST cannot be resolved – check DOCS_NAS_HOST in $SETUP_ENV (name or IP)."
+  is_private_ip "$DOCS_IP" || warn "NAS $NAS_HOST resolves to $DOCS_IP – not a private address. Check DOCS_NAS_HOST."
+  SYNC_ENV=$DOCS/env/docs-sync.env LOGIN_ENV=$DOCS/env/docs-login.env
+  NAS_PW=$(env_get "$SYNC_ENV" NAS_PASSWORD)
+  if [ -z "$NAS_PW" ]; then ask NAS_PW "Password of the NAS account $(setup_get DOCS_NAS_USER)" secret; fi
+  ONYX_ADMIN=$(env_get "$SYNC_ENV" ONYX_ADMIN_KEY)
+  if [ -z "$ONYX_ADMIN" ]; then
+    info "Document sync: needs a key from the Onyx admin area → API Keys, role Admin (creates connectors and document sets)."
+    ask_optional ONYX_ADMIN "Onyx admin API key (empty = later, then run setup.sh again)" secret
+  fi
+  ONYX_SEARCH=$(env_get "$DOCS/env/docs-search.env" ONYX_SEARCH_KEY)
+  if [ -z "$ONYX_SEARCH" ] && [ ! -f "$DOCS/env/docs-search.env" ]; then
+    info "Document search: a key with role Basic is enough. Empty = the key of LibreChat (ONYX_API_KEY)."
+    ask_optional ONYX_SEARCH "Onyx search API key (empty = ONYX_API_KEY)" secret
+  fi
+  CLIENT_SECRET=$(env_get "$LOGIN_ENV" OAUTH2_PROXY_CLIENT_SECRET)
+  if [ -z "$CLIENT_SECRET" ]; then
+    info "Keycloak client $(setup_get DOCS_CLIENT_ID) for the downloads (docs/README.md, section Keycloak) – tab Credentials."
+    ask CLIENT_SECRET "Client secret of $(setup_get DOCS_CLIENT_ID)" secret
+  fi
+  COOKIE_SECRET=$(env_get "$LOGIN_ENV" OAUTH2_PROXY_COOKIE_SECRET); COOKIE_SECRET=${COOKIE_SECRET:-$(random_hex 16)}
+  exclude="_archiv"; [ -n "$(setup_get DOCS_EXCLUDE)" ] && exclude="$exclude,$(setup_get DOCS_EXCLUDE)"
+  vision=false; is_true DOCS_VISION && [ -n "$VK_DOCS" ] && vision=true
+  cat > "$SYNC_ENV" <<EOF
+# docs-sync – generated by /opt/kira/setup.sh on every run (passwords and keys are kept; change: env/setup.env + setup.sh)
+NAS_HOST=$NAS_HOST
+NAS_SHARE=$(setup_get DOCS_NAS_SHARE)
+NAS_DOMAIN=$(setup_get DOCS_NAS_DOMAIN)
+NAS_USER=$(setup_get DOCS_NAS_USER)
+NAS_PASSWORD=$NAS_PW
+EXCLUDE_DIRS=$exclude
+ONYX_URL=http://onyx-api:8080
+ONYX_ADMIN_KEY=$ONYX_ADMIN
+KIRA_DOMAIN=$DOMAIN
+VISION=$vision
+BIFROST_URL=http://bifrost:8080/v1
+DOCS_VK=$VK_DOCS
+VISION_MODEL=$(setup_get DOCS_VISION_MODEL)
+VISION_LOCAL_MODEL=$(setup_get DOCS_VISION_LOCAL_MODEL)
+INTERVAL=900
+MAX_FILE_MB=100
+EOF
+  ONYX_LC=$(env_get "$LC_ENV" ONYX_API_KEY)
+  cat > "$DOCS/env/docs-search.env" <<EOF
+# docs-search – generated by /opt/kira/setup.sh on every run. DOCS_SEARCH_KEY = the same as in kira/env/librechat.env
+DOCS_SEARCH_KEY=$(env_get "$LC_ENV" DOCS_SEARCH_KEY)
+ONYX_URL=http://onyx-api:8080
+# empty in setup = LibreChat's ONYX_API_KEY
+ONYX_SEARCH_KEY=${ONYX_SEARCH:-$ONYX_LC}
+EOF
+  log_days=$(days_of "$(setup_get DOCS_DOWNLOAD_LOG_DAYS)" 1 3650 || echo 90)
+  cat > "$DOCS/env/docs-download.env" <<EOF
+# docs-download – generated by /opt/kira/setup.sh on every run
+DOWNLOAD_LOG=$(is_true DOCS_DOWNLOAD_LOG && echo true || echo false)
+DOWNLOAD_LOG_DAYS=${log_days:-90}
+EOF
+  # login service (oauth2-proxy) – Keycloak client kira-docs; with agents per group the "groups" claim, otherwise
+  # the client roles of the KIRA client ("roles": user/admin) decide who may download
+  claim=roles; is_true AGENT_GROUPS && claim=groups
+  cat > "$LOGIN_ENV" <<EOF
+# docs-login (oauth2-proxy) – generated by /opt/kira/setup.sh on every run (secrets are kept)
+OAUTH2_PROXY_PROVIDER=oidc
+OAUTH2_PROXY_PROVIDER_DISPLAY_NAME=Keycloak
+OAUTH2_PROXY_OIDC_ISSUER_URL=$(env_get "$LC_ENV" OPENID_ISSUER)
+OAUTH2_PROXY_CLIENT_ID=$(setup_get DOCS_CLIENT_ID)
+OAUTH2_PROXY_CLIENT_SECRET=$CLIENT_SECRET
+OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256
+OAUTH2_PROXY_SCOPE=openid profile email
+OAUTH2_PROXY_OIDC_GROUPS_CLAIM=$claim
+OAUTH2_PROXY_EMAIL_DOMAINS=*
+OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+OAUTH2_PROXY_REVERSE_PROXY=true
+OAUTH2_PROXY_PROXY_PREFIX=/dokumente/oauth2
+OAUTH2_PROXY_REDIRECT_URL=https://$DOMAIN/dokumente/oauth2/callback
+OAUTH2_PROXY_UPSTREAMS=static://404
+OAUTH2_PROXY_SET_XAUTHREQUEST=true
+OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true
+OAUTH2_PROXY_COOKIE_NAME=__Secure-kira-docs
+OAUTH2_PROXY_COOKIE_SECRET=$COOKIE_SECRET
+OAUTH2_PROXY_COOKIE_SECURE=true
+OAUTH2_PROXY_COOKIE_SAMESITE=lax
+OAUTH2_PROXY_COOKIE_PATH=/dokumente
+OAUTH2_PROXY_COOKIE_EXPIRE=8h
+OAUTH2_PROXY_COOKIE_REFRESH=1h
+OAUTH2_PROXY_REQUEST_LOGGING=false
+OAUTH2_PROXY_STANDARD_LOGGING=true
+OAUTH2_PROXY_AUTH_LOGGING=true
+EOF
+  chmod 600 "$SYNC_ENV" "$LOGIN_ENV" "$DOCS/env/docs-search.env" "$DOCS/env/docs-download.env"
+  unset NAS_PW ONYX_ADMIN ONYX_SEARCH ONYX_LC CLIENT_SECRET COOKIE_SECRET
+  [ -n "$(env_get "$SYNC_ENV" ONYX_ADMIN_KEY)" ] || warn "ONYX_ADMIN_KEY is empty – the document sync waits until it is set (run setup.sh again)."
+  is_true DOCS_VISION && [ -z "$VK_DOCS" ] && warn "DOCS_VISION=true, but VK_DOCS is missing in $BIFROST/env/bifrost.env."
+  info "Documents: NAS \\\\$NAS_HOST\\$(setup_get DOCS_NAS_SHARE) ($DOCS_IP), sync every 15 minutes."
+else
+  info "Documents are off (DOCS_ENABLED=false)."
+fi
+# Keycloak and NAS address for extra_hosts (also without documents, so the compose file stays valid)
+compose_env "$DOCS/env/compose.env"
+if [ -n "$DOCS_IP" ] && ! [[ $(setup_get DOCS_NAS_HOST) =~ $IPV4_RE ]]; then
+  printf 'NAS_NAME=%s\nNAS_IP=%s\n' "$(setup_get DOCS_NAS_HOST)" "$DOCS_IP" >> "$DOCS/env/compose.env"
+else
+  printf 'NAS_NAME=\nNAS_IP=\n' >> "$DOCS/env/compose.env"
+fi
+
 # ---------------------------------------------------------------- 7. Caddy
 section "Caddy (reverse proxy)"
 SITES=$CADDY/config/sites
@@ -1118,6 +1311,36 @@ if ! grep -q 'import /etc/caddy/sites/kira.d/' "$SITES/kira.caddy"; then
   fi
 fi
 rm -f "$SITES/kira.d/office.caddy"   # earlier test version (office download links)
+if is_true DOCS_ENABLED; then
+  cat > "$SITES/kira.d/docs.caddy" <<'EOF'
+# Original files of the agents' documents (stack docs) – generated by /opt/kira/setup.sh on every run.
+# /dokumente/oauth2/* = Keycloak login (oauth2-proxy, client kira-docs); /dokumente/<agent>/<id> = file, only after login
+# and only for users who may see the agent (checked by docs-download with the groups from the login service).
+handle /dokumente/oauth2/* {
+	reverse_proxy docs-login:4180
+}
+handle /dokumente/* {
+	route {
+		# never trust these headers from the browser – only the login service sets them (copy_headers)
+		request_header -X-Auth-Request-Email
+		request_header -X-Auth-Request-Groups
+		request_header -X-Auth-Request-User
+		request_header -X-Auth-Request-Preferred-Username
+		forward_auth docs-login:4180 {
+			uri /dokumente/oauth2/auth
+			copy_headers X-Auth-Request-Email X-Auth-Request-Groups
+			@login status 401
+			handle_response @login {
+				redir * /dokumente/oauth2/start?rd={http.request.orig_uri.path} 302
+			}
+		}
+		reverse_proxy docs-download:8080
+	}
+}
+EOF
+else
+  rm -f "$SITES/kira.d/docs.caddy"
+fi
 if is_true ONYX_ENABLED; then
   OD=$(setup_get ONYX_DOMAIN)
   if [ -f "$SITES/onyx.caddy.off" ] && [ ! -f "$SITES/onyx.caddy" ]; then mv "$SITES/onyx.caddy.off" "$SITES/onyx.caddy"; fi
@@ -1230,6 +1453,8 @@ create_net kira-llm    172.30.21.0/24
 create_net kira-search 172.30.22.0/24
 create_net kira-onyx   172.30.23.0/24
 create_net kira-code   172.30.29.0/24                     # LibreChat -> code interpreter API
+create_net kira-docs   172.30.31.0/24                     # LibreChat -> docs-search; docs-sync/-search -> Onyx API
+create_net kira-docsweb 172.30.32.0/24                    # Caddy -> docs-login, docs-download
 
 # ---------------------------------------------------------------- 9. LAN block (host firewall)
 section "LAN block"
@@ -1271,6 +1496,8 @@ ALLOW_DNS="$DNS"
 LIBRECHAT_ONLY_DST="$LC_ONLY"
 # Privacy guard: vLLM servers in the LAN that Bifrost (bifrost-outbound) may reach, as ip:port (empty = none)
 BIFROST_LAN_DST="$GUARD_DST"
+# Documents: the NAS (SMB) that only docs-sync (docs-outbound) may reach, as ip:445 (empty = documents off)
+DOCS_NAS_DST="${DOCS_IP:+$DOCS_IP:445}"
 EOF
 umask 077
 UNIT=/etc/systemd/system/kira-egress-firewall.service
@@ -1375,6 +1602,12 @@ EOF
 10 8 * * 1 root /opt/kira/scripts/privacy-report.sh 2>&1 | logger -t kira-privacy
 EOF
   fi
+  if is_true DOCS_ENABLED; then
+    cat >> /etc/cron.d/kira <<'EOF'
+# nightly at 03:15: restart LibreChat if the template skills changed (it reads them only when it starts)
+15 3 * * * root /opt/kira/scripts/templates-reload.sh --quiet 2>&1 | logger -t kira-templates
+EOF
+  fi
   umask 077
   info "/etc/cron.d/kira written."
   command -v cron >/dev/null || command -v crond >/dev/null \
@@ -1388,7 +1621,7 @@ for d in "${STACK_DIRS[@]}"; do
   chmod 700 "$d/env"
   find "$d/env" -type f -exec chmod 600 {} +
 done
-chmod 644 "$KIRA/config/librechat.yaml" "$EGRESS_ENV" "$BIFROST_JSON" "$CADDY/config/Caddyfile"
+chmod 644 "$KIRA/config/librechat.yaml" "$KIRA/config/docs-agents.json" "$EGRESS_ENV" "$BIFROST_JSON" "$CADDY/config/Caddyfile"
 chmod 700 "$KIRA/scripts"
 chmod 755 "$KIRA/scripts"/*.sh "$KIRA/scripts"/*.py
 
@@ -1425,12 +1658,32 @@ else
   sed -i '/^BIFROST_IMAGE=/d' "$VERSIONS_BF" 2>/dev/null || true   # official image as before
 fi
 
+# ---------------------------------------------------------------- 11c. Documents: image kira/docs
+VERSIONS_DOCS=$DOCS/env/versions.env
+if is_true DOCS_ENABLED; then
+  section "Documents (image kira/docs)"
+  PY_IMG=$(env_get "$VERSIONS_DOCS" PYTHON_IMAGE); PY_IMG=${PY_IMG:-python:3.13-slim-bookworm}
+  # tag = hash of the sources and the base image: a new package or base image builds a new image
+  D_HASH=$( { (cd "$DOCS/app" && find . -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -print0 | sort -z \
+              | xargs -0 sha256sum); echo "$PY_IMG"; } | sha256sum | cut -c1-10)
+  DOCS_IMAGE="kira/docs:$D_HASH"
+  if docker image inspect "$DOCS_IMAGE" >/dev/null 2>&1; then
+    info "Image $DOCS_IMAGE exists."
+  else
+    info "Building $DOCS_IMAGE (Python, Tesseract OCR – a few minutes) …"
+    docker build --pull --build-arg PYTHON_IMAGE="$PY_IMG" -t "$DOCS_IMAGE" "$DOCS/app" \
+      || die "Build of $DOCS_IMAGE failed – details above (docs/README.md)."
+  fi
+  env_set "$VERSIONS_DOCS" DOCS_IMAGE "$DOCS_IMAGE"
+fi
+
 # ---------------------------------------------------------------- 12. Start
 section "Start"
 STACKS=(bifrost websearch)
 is_true CODE_INTERPRETER && STACKS+=(codeinterpreter)
 STACKS+=(kira)
 is_true ONYX_ENABLED && STACKS+=(onyx)
+is_true DOCS_ENABLED && STACKS+=(docs)
 STACKS+=(caddy)
 running() { [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]; }
 groups_pending() {   # agents per group: plan differs from the last applied state
@@ -1472,6 +1725,9 @@ if [ "$START" = true ]; then
     info "--- $s: pulling images"
     if [ "$s" = bifrost ] && is_true PRIVACY_GUARD; then
       docker compose -f "$f" pull db || die "images for $s could not be pulled – check the tag in /opt/$s/env/versions.env."
+    elif [ "$s" = docs ]; then
+      # kira/docs is built locally (11c) – only the login service comes from a registry
+      docker compose -f "$f" pull docs-login || die "image of the login service could not be pulled – OAUTH2_PROXY_TAG in /opt/docs/env/versions.env."
     else
       docker compose -f "$f" pull || die "images for $s could not be pulled – check the tag in /opt/$s/env/versions.env."
     fi
@@ -1491,6 +1747,16 @@ if [ "$START" = true ]; then
   fi
   if ! is_true ONYX_ENABLED && running onyx-api; then
     info "Note: Onyx is off but still running – stop it with: docker compose -f /opt/onyx/docker-compose.yml down"
+  fi
+  if is_true DOCS_ENABLED && running docs-sync; then
+    info "Documents: checking the NAS connection …"
+    docker exec docs-sync python -m kiradocs.sync --check \
+      || warn "NAS not readable from docs-sync – address, share, account and firewall (docs/README.md, Troubleshooting)."
+    # LibreChat reads the template skills only when it starts – restart it now if they changed
+    "$KIRA/scripts/templates-reload.sh" || warn "templates-reload.sh failed – details above."
+  fi
+  if ! is_true DOCS_ENABLED && running docs-sync; then
+    info "Note: documents are off but still running – stop them with: docker compose -f /opt/docs/docker-compose.yml down"
   fi
   if ! is_true CODE_INTERPRETER && running codeapi; then
     info "Note: the code interpreter is off but still running – stop it with: bash $CODEI/codeapi.sh down"
@@ -1524,4 +1790,9 @@ is_true AGENT_GROUPS && info "   Agents per group: in Keycloak add the mapper \"
 is_true IMAGE_GENERATION && info "4. Create the image agent once: README, section \"Image agent\"."
 is_true ONYX_ENABLED && info "5. Set up Onyx (admin account, LLM via Bifrost, API key, SharePoint): README, section \"Onyx\"."
 is_true CODE_INTERPRETER && info "6. Code interpreter: in KIRA \"Erstelle eine Word-Datei mit …\" – the file appears in the chat (codeinterpreter/README.md)."
+if is_true DOCS_ENABLED; then
+  info "7. Documents: Keycloak client $(setup_get DOCS_CLIENT_ID) with redirect URI https://$DOMAIN/dokumente/oauth2/callback (docs/README.md);"
+  info "   on the NAS one folder per agent with DOCS=true or TEMPLATES=true (folder name = NAME), templates in <agent>/_vorlagen."
+  info "   First pass and status: docker logs -f docs-sync · cost estimate: docker exec docs-sync python -m kiradocs.sync --estimate"
+fi
 exit 0

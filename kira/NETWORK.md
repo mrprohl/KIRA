@@ -12,22 +12,25 @@ Which container is attached to which Docker network. Source of truth: the `compo
 - **Databases have no internet.** They sit only in the internal network of their own stack (`*_backend`); one
   stack cannot reach the database of another.
 - **Each shared network has one purpose:** `kira-llm` → Bifrost, `kira-search` → web search, `kira-onyx` → Onyx MCP,
-  `kira-code` → code interpreter API, `kira-proxy` → Caddy to the web front ends. LibreChat is the only container in
-  all of them.
-- **Internet only where needed**, each stack through its own egress network (`172.31.60–64.0/24`). The LAN block
+  `kira-code` → code interpreter API, `kira-docs` → document search and Onyx API, `kira-docsweb` → Caddy to the login
+  and download of the original files, `kira-proxy` → Caddy to the web front ends. LibreChat is in all of them except
+  `kira-docsweb`.
+- **Internet only where needed**, each stack through its own egress network (`172.31.60–66.0/24`). The LAN block
   (`kira-egress-firewall`) drops traffic from these networks to the LAN and to the host – and from all internal
   networks (`172.30.0.0/16`) to the host's own services.
 - **LibreChat has no internet** when Keycloak is in the LAN (`KEYCLOAK_INTERNAL_IP` set, or its name resolves to a
   private address) and the LAN block is on: from `kira-outbound` only Keycloak:443 and DNS are allowed. With Keycloak
   only via the internet, LibreChat gets internet like the other stacks.
   AI, web search and intranet always run over the internal networks.
-- **Only LibreChat and Onyx reach Keycloak** in the LAN (login; Onyx for optional SSO in its admin area) – Bifrost and
-  the web search do not. `builder-sync.py` runs on the host and is not affected.
+- **Only LibreChat, Onyx and the documents' login service reach Keycloak** in the LAN (login; Onyx for optional SSO in
+  its admin area) – Bifrost and the web search do not. `builder-sync.py` runs on the host and is not affected.
+- **Only `docs-sync` reaches the NAS** – exactly its IP on port 445, nothing else (no internet, no DNS, no other LAN
+  destination; chain `KIRA-EGRESS-DOCS`).
 
 ## Container × network
 
 ✔ = attached. "Internet" = the egress network of the stack (`kira-edge`, `kira-outbound`, `bifrost-outbound`,
-`websearch-outbound`, `onyx-outbound`). "Stack internal" = `kira_backend`, `bifrost_backend`, `websearch_backend`,
+`websearch-outbound`, `onyx-outbound`, `docs-outbound`, `docs-auth`). "Stack internal" = `kira_backend`, `bifrost_backend`, `websearch_backend`,
 `onyx_backend`, `codeinterpreter_backend`. All networks except the egress networks are `internal` (no internet).
 
 | Stack | Container | Internet | kira-proxy | kira-llm | kira-search | kira-onyx | kira-code | Stack internal |
@@ -59,6 +62,18 @@ Which container is attached to which Docker network. Source of truth: the `compo
 | codeinterpreter | `codeapi` (API) | | | | | | ✔ | ✔ |
 | codeinterpreter | `codeapi-worker`, `codeapi-sandbox`, `codeapi-egress`, `codeapi-toolcall`, `codeapi-files`, `codeapi-redis`, `codeapi-minio` | | | | | | | ✔ |
 
+Documents (stack `docs`, only with `DOCS_ENABLED=true`):
+
+| Container | Egress | kira-docs | kira-docsweb | kira-llm | further |
+|---|:-:|:-:|:-:|:-:|---|
+| `docs-sync` | `docs-outbound`: only the NAS ip:445 | ✔ | | ✔ | |
+| `docs-search` | | ✔ | | | |
+| `docs-download` | | | ✔ | | |
+| `docs-login` | `docs-auth`: Keycloak (like LibreChat) | | ✔ | | |
+| `librechat` | | ✔ | | | |
+| `onyx-api` | | ✔ | | | |
+| `caddy` | | | ✔ | | |
+
 The Onyx containers only run when Onyx is enabled in the setup; otherwise `kira-onyx` stays empty. The code
 interpreter only runs with `CODE_INTERPRETER=true`; it has no internet and no LAN at all (`codeinterpreter_backend`
 is internal) – the sandbox VMs only reach the egress gateway, and LibreChat only the API `codeapi:3112`.
@@ -72,5 +87,7 @@ is internal) – the sandbox VMs only reach the egress gateway, and LibreChat on
 | `bifrost-outbound` | Bifrost | Anthropic, OpenAI; with the privacy guard also the four vLLM servers in the LAN (exactly ip:port, `BIFROST_LAN_DST`) |
 | `websearch-outbound` | SearXNG, Firecrawl, browser | search engines, web pages |
 | `onyx-outbound` | Onyx API, indexing, models | SharePoint/Graph, Hugging Face, Keycloak (optional SSO) |
+| `docs-outbound` | docs-sync | the NAS, exactly ip:445 (`DOCS_NAS_DST`) – nothing else |
+| `docs-auth` | docs-login | Keycloak only (rules as for LibreChat) |
 
 Check on the server: `docker network inspect <network> -f '{{range .Containers}}{{.Name}} {{end}}'`.

@@ -44,8 +44,9 @@ content (fixed categories) and is not precise enough for data rules; its categor
 
 ## Flow of a request
 
-1. LibreChat sends the request as before to Bifrost (`vk-librechat`). Requests with other virtual keys (Onyx, external
-   services) are not checked.
+1. LibreChat sends the request as before to Bifrost (`vk-librechat`); the document sync uses `vk-docs` (images of
+   scans and handwriting) and is checked the same way. Requests with other virtual keys (Onyx, external services) are
+   not checked.
 2. The plugin (`HTTPTransportPreHook`, before Bifrost's own plugins) takes everything that would leave the house:
    system prompt, all messages, tool calls and tool results, images. Parts already checked are known by their hash
    (memory cache, 24 h, never stored on disk) – only new parts are checked; long texts in parts of 8,000 characters.
@@ -86,6 +87,7 @@ with a hit to the local model – without notice.
 | Image generation and image edits | prompt is checked; on a privacy or safety hit, or if the check fails: **refused** (no local image model) |
 | Speech output (TTS) | text is checked; on a hit **refused** |
 | Code interpreter (`CODE_INTERPRETER`) | runs on the KIRA server, uploaded files stay in the house; what the code returns goes back to the model as a tool result and is checked like every other part – with a hit the chat is answered locally (the local answer model keeps the code tool) |
+| Documents per agent (`DOCS_ENABLED`, key `vk-docs`) | images of handwriting and photos are checked like chat images: with personal data the local model transcribes (if it can read images) or the file stays untranscribed (`skipped-privacy`, retried after a day); checker down → nothing is sent. Agents with `CONFIDENTIAL=true` use only `DOCS_VISION_LOCAL_MODEL` and answer with `vllm/kira-answer`. The Onyx search itself runs with Onyx's LLM (`vk-onyx`, not checked) – switch it to the local model in Onyx for confidential folders ([docs/README.md](../docs/README.md)) |
 | Speech input (STT) | audio cannot be checked before it is transcribed – goes to OpenAI as before; switch speech off (`SPEECH=false`) if that is not acceptable |
 
 ## Settings

@@ -16,32 +16,41 @@
 # LIBRECHAT_ONLY_DST: if set (Keycloak in the LAN), LibreChat (kira-outbound) gets no internet at all – only these
 # destinations on port 443 plus DNS. Everything else LibreChat needs runs over the internal networks.
 # BIFROST_LAN_DST: privacy guard – vLLM servers in the LAN (ip:port) that only Bifrost (bifrost-outbound) may reach.
+# DOCS_NAS_DST: documents – the NAS (ip:445) that docs-sync (docs-outbound) may reach; docs-outbound gets nothing else
+# (no internet, no other LAN destination). docs-auth (login service of the downloads) is treated like LibreChat.
 # ============================================================================
 set -euo pipefail
 
 CHAIN=KIRA-EGRESS
 CHAIN_IN=KIRA-EGRESS-IN
 CHAIN_LC=KIRA-EGRESS-LIBRECHAT
-# kira-edge (Caddy), bifrost-outbound, kira-outbound, websearch-outbound, onyx-outbound – see the stacks' compose.yml
-SOURCES=(172.31.60.0/24 172.31.61.0/24 172.31.62.0/24 172.31.63.0/24 172.31.64.0/24)
+CHAIN_DOCS=KIRA-EGRESS-DOCS
+# kira-edge (Caddy), bifrost-outbound, kira-outbound, websearch-outbound, onyx-outbound, docs-outbound, docs-auth –
+# see the stacks' compose.yml
+SOURCES=(172.31.60.0/24 172.31.61.0/24 172.31.62.0/24 172.31.63.0/24 172.31.64.0/24 172.31.65.0/24 172.31.66.0/24)
 # internal networks of all stacks (172.30.20–30.0/24 – kira-proxy, kira-llm …, *_backend, codeinterpreter_backend):
 # Docker keeps them away from LAN and internet, but not from the host's own services – blocked below (INPUT)
 INTERNAL=172.30.0.0/16
 LC_SOURCE=172.31.62.0/24
 BIFROST_SOURCE=172.31.61.0/24
-# networks that may reach Keycloak in the LAN: LibreChat (login) and Onyx (optional SSO in its admin area)
-KC_SOURCES=("$LC_SOURCE" 172.31.64.0/24)
+DOCS_SOURCE=172.31.65.0/24        # docs-sync: only the NAS
+DOCS_AUTH_SOURCE=172.31.66.0/24   # docs-login: Keycloak like LibreChat
+# networks that may reach Keycloak in the LAN: LibreChat (login), Onyx (optional SSO in its admin area), docs-login
+KC_SOURCES=("$LC_SOURCE" 172.31.64.0/24 "$DOCS_AUTH_SOURCE")
 PRIVATE=(0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4)
 CONF=/opt/kira/config/egress.env
 ALLOW_PRIVATE_DST=""
 ALLOW_DNS=""
 LIBRECHAT_ONLY_DST=""
 BIFROST_LAN_DST=""
+DOCS_NAS_DST=""
 # shellcheck source=/dev/null
 [ -f "$CONF" ] && . "$CONF"
 
 chain_for() {   # chain_for <source> – the chain a source network jumps to
-  if [ "$1" = "$LC_SOURCE" ] && [ -n "$LIBRECHAT_ONLY_DST" ]; then echo "$CHAIN_LC"; else echo "$CHAIN"; fi
+  if [ "$1" = "$DOCS_SOURCE" ]; then echo "$CHAIN_DOCS"
+  elif { [ "$1" = "$LC_SOURCE" ] || [ "$1" = "$DOCS_AUTH_SOURCE" ]; } && [ -n "$LIBRECHAT_ONLY_DST" ]; then echo "$CHAIN_LC"
+  else echo "$CHAIN"; fi
 }
 
 need_docker_user() {
@@ -83,10 +92,17 @@ apply() {
     done
     iptables -A "$CHAIN_LC" -j DROP
   fi
+  # documents: docs-sync reaches exactly the NAS on port 445 – nothing else (no DNS: the NAS name is in /etc/hosts)
+  iptables -N "$CHAIN_DOCS" 2>/dev/null || iptables -F "$CHAIN_DOCS"
+  iptables -A "$CHAIN_DOCS" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  for dst in $DOCS_NAS_DST; do
+    iptables -A "$CHAIN_DOCS" -d "${dst%:*}" -p tcp --dport "${dst##*:}" -j RETURN
+  done
+  iptables -A "$CHAIN_DOCS" -j DROP
   # traffic within the same network (e.g. Firecrawl -> Playwright) stays allowed: "! -d $src"
   for src in "${SOURCES[@]}"; do
     local want; want=$(chain_for "$src")
-    for c in "$CHAIN" "$CHAIN_LC"; do   # switch cleanly when the mode changes
+    for c in "$CHAIN" "$CHAIN_LC" "$CHAIN_DOCS"; do   # switch cleanly when the mode changes
       [ "$c" = "$want" ] && continue
       while iptables -D DOCKER-USER -s "$src" ! -d "$src" -j "$c" 2>/dev/null; do :; done
     done
@@ -107,16 +123,18 @@ apply() {
   echo "LAN block active: ${SOURCES[*]} -> no private destinations; ${SOURCES[*]} $INTERNAL -> no host services${ALLOW_PRIVATE_DST:+ (exception: $ALLOW_PRIVATE_DST:443 for LibreChat and Onyx)}."
   [ -z "$LIBRECHAT_ONLY_DST" ] || echo "LibreChat ($LC_SOURCE): no internet – only $LIBRECHAT_ONLY_DST:443 and DNS."
   [ -z "$BIFROST_LAN_DST" ] || echo "Bifrost ($BIFROST_SOURCE): additionally the vLLM servers $BIFROST_LAN_DST (privacy guard)."
+  echo "docs-sync ($DOCS_SOURCE): only ${DOCS_NAS_DST:-nothing (documents off)}."
 }
 
 remove() {
   for src in "${SOURCES[@]}"; do
     while iptables -D DOCKER-USER -s "$src" ! -d "$src" -j "$CHAIN" 2>/dev/null; do :; done
     while iptables -D DOCKER-USER -s "$src" ! -d "$src" -j "$CHAIN_LC" 2>/dev/null; do :; done
+    while iptables -D DOCKER-USER -s "$src" ! -d "$src" -j "$CHAIN_DOCS" 2>/dev/null; do :; done
     while iptables -D INPUT -s "$src" -j "$CHAIN_IN" 2>/dev/null; do :; done
   done
   while iptables -D INPUT -s "$INTERNAL" -j "$CHAIN_IN" 2>/dev/null; do :; done
-  for c in "$CHAIN" "$CHAIN_IN" "$CHAIN_LC"; do
+  for c in "$CHAIN" "$CHAIN_IN" "$CHAIN_LC" "$CHAIN_DOCS"; do
     iptables -F "$c" 2>/dev/null || true
     iptables -X "$c" 2>/dev/null || true
   done
@@ -131,7 +149,8 @@ status() {
     iptables -C INPUT -s "$src" -j "$CHAIN_IN" 2>/dev/null || { echo "missing: INPUT -s $src -j $CHAIN_IN"; ok=1; }
   done
   iptables -C INPUT -s "$INTERNAL" -j "$CHAIN_IN" 2>/dev/null || { echo "missing: INPUT -s $INTERNAL -j $CHAIN_IN"; ok=1; }
-  [ "${1:-}" = "-q" ] || { iptables -nvL "$CHAIN" 2>/dev/null; [ -z "$LIBRECHAT_ONLY_DST" ] || iptables -nvL "$CHAIN_LC" 2>/dev/null; } || true
+  [ "${1:-}" = "-q" ] || { iptables -nvL "$CHAIN" 2>/dev/null; iptables -nvL "$CHAIN_DOCS" 2>/dev/null
+                           [ -z "$LIBRECHAT_ONLY_DST" ] || iptables -nvL "$CHAIN_LC" 2>/dev/null; } || true
   return $ok
 }
 

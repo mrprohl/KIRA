@@ -4,7 +4,8 @@
 
 As of 27.11.2026 · package `kira-stack.zip`, extracted to `/opt`. Chat interface **LibreChat** with fixed agents,
 models via the gateway **Bifrost**, web search via **SearXNG + Firecrawl**, intranet search (optional) via **Onyx**,
-code and documents (optional) via the **code interpreter** in a KVM sandbox. Login via Keycloak SSO only (forwarding to Microsoft 365).
+code and documents (optional) via the **code interpreter** in a KVM sandbox, documents per agent from a NAS (optional,
+stack **docs**). Login via Keycloak SSO only (forwarding to Microsoft 365).
 Step-by-step installation: `INSTALL.md`.
 
 ## Architecture
@@ -44,6 +45,12 @@ flowchart LR
     CI[Code interpreter<br/>KVM sandbox: Python,<br/>Word, Excel, PowerPoint, PDF]
   end
 
+  subgraph docs["/opt/docs (optional)"]
+    DS[docs-sync<br/>NAS → Onyx, templates]
+    DQ[docs-search<br/>search per agent]
+    DD[docs-login + docs-download<br/>original files]
+  end
+
   C --> LC
   C -->|LLM API, admin UI| BF
   C -->|admin UI| OX
@@ -55,6 +62,11 @@ flowchart LR
   LC -->|MCP: agent Intranet| OX
   OX -->|LLM| BF
   LC -->|run code, files back into the chat| CI
+  LC -->|MCP: documents of the agent| DQ
+  DQ & DS --> OX
+  DS -->|image model| BF
+  C -->|/dokumente/| DD
+  DS ==>|SMB, only the NAS| NAS([NAS: one folder per agent])
   BF --> BDB
   LC -.->|OIDC| KC([Keycloak → Microsoft 365])
   BF ==>|internet| AI([Anthropic, OpenAI])
@@ -78,6 +90,7 @@ Large version as an image: [docs/architecture.png](docs/architecture.png).
 | websearch | SearXNG | meta search (Google, Bing, Brave, Startpage, Mojeek) without account or API costs | returns the result list |
 | | Firecrawl (+ Playwright, Redis, RabbitMQ, Postgres) | fetches the result pages and turns them into readable text | the model itself cannot access the internet via the API |
 | onyx | Onyx Community Edition | indexes SharePoint (documents, notes …), provides the search via MCP | intranet knowledge without uploading per agent; needs 12–16 GB RAM |
+| docs | docs-sync, docs-search, docs-download, docs-login (oauth2-proxy) | one folder per agent on the NAS → Onyx (text, OCR, image model for handwriting); search only in the agent's own folder; templates as skill; links to the originals behind login | documents per agent with sources and rights like the agents – [docs/README.md](../docs/README.md) |
 | codeinterpreter | code interpreter ([ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter), Apache 2.0): API, worker, KVM sandbox, file server, Redis, MinIO | runs Python written by the model in a small VM per run: analyses, charts and documents (Word, Excel, PowerPoint, PDF, CSV) | files appear directly in the chat with preview and download; built from source, needs `/dev/kvm` – [codeinterpreter/README.md](../codeinterpreter/README.md) |
 
 ## Connections and networks
@@ -85,7 +98,7 @@ Large version as an image: [docs/architecture.png](docs/architecture.png).
 Diagram and container × network table: [NETWORK.md](NETWORK.md).
 
 All networks have fixed subnets. "internal" = without internet access. Networks with internet are separated from
-LAN and host by the **LAN block** (`scripts/egress-firewall.sh`, switch `LAN_BLOCK`) – the only exception is Keycloak on port 443, and only for LibreChat and Onyx.
+LAN and host by the **LAN block** (`scripts/egress-firewall.sh`, switch `LAN_BLOCK`) – the only exceptions are Keycloak on port 443 (only for LibreChat, Onyx and the login service of the documents) and the NAS on port 445 (only for `docs-sync`).
 With Keycloak in the LAN (`KEYCLOAK_INTERNAL_IP`) LibreChat gets no internet at all, only Keycloak:443 and DNS.
 
 | Network | Subnet | Who | Purpose |
@@ -95,6 +108,8 @@ With Keycloak in the LAN (`KEYCLOAK_INTERNAL_IP`) LibreChat gets no internet at 
 | `kira-search` | 172.30.22.0/24, internal | LibreChat, SearXNG, Firecrawl | web search |
 | `kira-onyx` | 172.30.23.0/24, internal | LibreChat, Onyx MCP | agent "Intranet" |
 | `kira-code` | 172.30.29.0/24, internal | LibreChat, code interpreter API (`codeapi`) | run code |
+| `kira-docs` | 172.30.31.0/24, internal | LibreChat, docs-search, docs-sync, Onyx API | document search per agent |
+| `kira-docsweb` | 172.30.32.0/24, internal | Caddy, docs-login, docs-download | login and download of the original files |
 | `*_backend` | 172.30.24–27.0/24, internal | each stack's databases | databases only within their own stack |
 | `codeinterpreter_backend` | 172.30.30.0/24, internal | all code interpreter services | sandbox ↔ egress gateway, file server, Redis, MinIO – no internet |
 | `kira-edge` | 172.31.60.0/24 | Caddy | certificates |
@@ -102,6 +117,8 @@ With Keycloak in the LAN (`KEYCLOAK_INTERNAL_IP`) LibreChat gets no internet at 
 | `kira-outbound` | 172.31.62.0/24 | LibreChat | Keycloak (OIDC) – with `KEYCLOAK_INTERNAL_IP` nothing else (no internet) |
 | `websearch-outbound` | 172.31.63.0/24 | SearXNG, Firecrawl | search engines, web pages |
 | `onyx-outbound` | 172.31.64.0/24 | Onyx | SharePoint, Hugging Face (models on first start) |
+| `docs-outbound` | 172.31.65.0/24 | docs-sync | only the NAS (ip:445) – no internet |
+| `docs-auth` | 172.31.66.0/24 | docs-login | Keycloak (rules as for LibreChat) |
 
 MongoDB, Meilisearch, pgvector, the RAG API and all databases have no internet access.
 
@@ -113,7 +130,7 @@ bare metal or a VM with nested virtualisation, **not** an LXC container), Compos
 parallel code run (`CODE_PARALLEL`, default 4) and 30 GB disk for its images. Ports 80 and 443 must be free. The certificates live in the volume `caddy_data` and survive a reinstall.
 
 ```bash
-unzip -o kira-stack.zip -d /opt          # creates /opt/caddy, bifrost, kira, websearch, onyx, codeinterpreter – on the server
+unzip -o kira-stack.zip -d /opt          # creates /opt/caddy, bifrost, kira, websearch, onyx, codeinterpreter, docs – on the server
 # optional: take over the Keycloak client (setup.sh then does not ask for it)
 umask 077; scp root@<keycloak-host>:/opt/keycloak/env/kira-client-kira.env /opt/kira/env/keycloak-client.env
 bash /opt/kira/setup.sh                  # asks everything, sets permissions, starts on request and tests
@@ -121,9 +138,10 @@ bash /opt/kira/setup.sh                  # asks everything, sets permissions, st
 
 `setup.sh` creates the secrets, generates the configurations, the Docker networks, the LAN block (systemd) and
 `/etc/cron.d/kira` (monitoring, backup, cost report). Running it again is safe. Start order:
-bifrost → websearch → codeinterpreter → kira → onyx → caddy – via CLI from `setup.sh` or in Portainer
-(paste `/opt/<stack>/docker-compose.yml` for each stack, no environment variables). The code interpreter is built
-from source and is only started by `setup.sh` (or `codeinterpreter/codeapi.sh`), not in Portainer.
+bifrost → websearch → codeinterpreter → kira → onyx → docs → caddy – via CLI from `setup.sh` or in Portainer
+(paste `/opt/<stack>/docker-compose.yml` for each stack, no environment variables). The code interpreter and the
+document services are built on the server and are only started by `setup.sh` (or `codeinterpreter/codeapi.sh`,
+`docker compose -f /opt/docs/docker-compose.yml`), not in Portainer.
 
 **Keycloak** (client `kira`): valid redirect URI `https://<kira-domain>/oauth/openid/callback`, post-logout redirect
 `https://<kira-domain>/login`; PKCE S256; mapper "User Client Role" with claim name `roles` in the **ID token**.
@@ -162,6 +180,7 @@ restarts the affected services.
 | `LLM_API_DOMAIN`, `BIFROST_UI_DOMAIN` (+ `…_ALLOWED_IPS`) | LLM API for external applications and Bifrost web interface from outside |
 | `AGENT_BUILDER` | only switch via `scripts/agent-builder.sh on|off` |
 | `CODE_INTERPRETER`, `CODE_PARALLEL` | code interpreter (stack codeinterpreter, needs `/dev/kvm`): analyses, charts and documents in the chat; `CODE_PARALLEL` = runs at the same time (1–16, default 4) – section "Code interpreter" |
+| `DOCS_ENABLED`, `DOCS_*` | documents per agent from the NAS (needs Onyx): NAS address, share, account, excluded folders, image model and its budget, download log – [docs/README.md](../docs/README.md) |
 | `PRIVACY_GUARD`, `GUARD_*` | privacy guard with own LLMs on vLLM servers: personal/secret data answered locally, harmful requests refused – [PRIVACY-GUARD.md](PRIVACY-GUARD.md). `false` = as without it |
 
 ## Agents
@@ -170,16 +189,18 @@ The agents live in `/opt/kira/agents/` – per agent one `.env` (settings) and o
 Field description in `agents/README.md`. Users only see these agents, no raw models, no parameters.
 Titles, descriptions and instructions are German, as the users see them.
 
-| Agent (`NAME`) | Title (as shipped) | Model | Web search | Files | Intranet | Images | Code |
-|---|---|---|---|---|---|---|---|
-| `kira` (default) | KIRA | Claude Sonnet 5.5 | yes | yes | – | – | yes¹ |
-| `code` | Code | Claude Opus 5.5 | yes | yes | – | – | yes¹ |
-| `intranet` | Intranet | GPT-6.1 Terra | – | – | yes (Onyx) | – | – |
-| `images` | as `TITLE` in `40-images.env` | Claude Haiku 5.5 (prompt), image: `IMAGE_MODEL` | – | yes | – | yes | – |
-| `writing` | Textwerkstatt | Claude Sonnet 5.5 | – | yes | – | – | yes¹ |
-| `minutes` | Protokoll | Claude Sonnet 5.5 | – | yes | – | – | yes¹ |
+| Agent (`NAME`) | Title (as shipped) | Model | Web search | Files | Intranet | Images | Code | Documents |
+|---|---|---|---|---|---|---|---|---|
+| `kira` (default) | KIRA | Claude Sonnet 5.5 | yes | yes | – | – | yes¹ | – |
+| `code` | Code | Claude Opus 5.5 | yes | yes | – | – | yes¹ | – |
+| `intranet` | Intranet | GPT-6.1 Terra | – | – | yes (Onyx)³ | – | – | yes² |
+| `images` | as `TITLE` in `40-images.env` | Claude Haiku 5.5 (prompt), image: `IMAGE_MODEL` | – | yes | – | yes | – | – |
+| `writing` | Textwerkstatt | Claude Sonnet 5.5 | – | yes | – | – | yes¹ | yes², templates |
+| `minutes` | Protokoll | Claude Sonnet 5.5 | – | yes | – | – | yes¹ | – |
 
 ¹ only with `CODE_INTERPRETER=true` – runs Python and writes documents (section "Code interpreter").
+² only with `DOCS_ENABLED=true` – searches its own NAS folder (`DOCS`), templates from `_vorlagen` (`TEMPLATES`) –
+[docs/README.md](../docs/README.md). ³ with `DOCS_ENABLED=true` replaced by the agent's own folder.
 
 Titles of chats and summaries of long chats: Claude Haiku 5.5. Opus ignores `TEMPERATURE` (Bifrost drops it).
 
@@ -340,7 +361,8 @@ the fixed agents), because model specs are not enforced for them – the interfa
 the same key and budget as the fixed agents. The endpoint "Bild-Agent" (Haiku) is also offered in the builder,
 because the image agent needs it. With Onyx, builders can also add the MCP server "intranet" to their own agents –
 they then search the intranet even if their agent group does not include the agent "Intranet". Only make people
-builders who may see the intranet content.
+builders who may see the intranet content. With the document search (`DOCS_ENABLED=true`) the MCP server "intranet"
+is not configured at all; the document searches `docs-<agent>` refuse own agents, even if a builder adds them.
 
 ## Onyx (intranet search)
 
@@ -362,6 +384,17 @@ could search the indexed intranet content. KIRA itself talks to Onyx internally 
    sees what everyone may see – taking over SharePoint permissions is only available in the paid version.
 
 OpenSearch needs `vm.max_map_count=262144` on the host (`setup.sh` warns; in a container set it on its host).
+
+## Documents per agent (optional)
+
+Switch `DOCS_ENABLED` (needs Onyx). Each agent with `DOCS=true` searches only its own folder on the NAS
+(`\\<nas>\<share>\<NAME>\`, SMB 2/3, read only, synchronised every 15 minutes) and names its sources as links to
+the original file – the download asks for the Keycloak login (client `kira-docs`) and checks the same groups as the
+agents. Scans are read with OCR, handwriting and photos with the image model via Bifrost (own key `vk-docs` with budget;
+checked by the privacy guard when it is on). Agents with `TEMPLATES=true` write letters from the Word/Excel/PowerPoint
+templates in `<NAME>/_vorlagen` (skill `vorlagen-<NAME>`, needs the code interpreter; changes take effect after the
+nightly LibreChat restart or `scripts/templates-reload.sh`). Setup, Keycloak client, folders, security and
+troubleshooting: [docs/README.md](../docs/README.md).
 
 ## Code interpreter
 

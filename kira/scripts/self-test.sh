@@ -12,6 +12,7 @@ setup_get() { sed -n "s/^$1=//p" "$KIRA_DIR/env/setup.env" | tail -1 | tr -d '"'
 env_get()   { sed -n "s/^$2=//p" "$1" | tail -1 | sed 's/^"\(.*\)"$/\1/'; }
 
 ONYX_ENABLED=$(setup_get ONYX_ENABLED)
+DOCS_ENABLED=$(setup_get DOCS_ENABLED)
 DOMAIN=$(setup_get KIRA_DOMAIN)
 LC_ENV=$KIRA_DIR/env/librechat.env
 errors=0
@@ -27,6 +28,7 @@ if [ "$ONYX_ENABLED" = "true" ]; then
                onyx-db onyx-opensearch onyx-cache onyx-nginx)
   TIMEOUT=1200
 fi
+if [ "$DOCS_ENABLED" = "true" ]; then CONTAINERS+=(docs-sync docs-search docs-download docs-login); fi
 
 state_of() {
   local s
@@ -111,6 +113,43 @@ else
     if [[ $res == ERR* ]]; then bad "LibreChat -> Onyx MCP: $res"; hint "docker logs --tail 50 onyx-mcp"
     else ok "LibreChat -> Onyx MCP reachable"; fi
     [ -n "$(env_get "$LC_ENV" ONYX_API_KEY)" ] || printf '  [info] ONYX_API_KEY is still missing – agent "Intranet" is hidden (README, section Onyx)\n'
+  fi
+  if [ "$DOCS_ENABLED" = "true" ]; then
+    echo "== Documents (stack docs) =="
+    check_http "LibreChat -> docs-search" '^200 ' "docker logs --tail 50 docs-search – network kira-docs" \
+      GET http://docs-search:8095/health
+    check_http "LibreChat -> docs-search (MCP with DOCS_SEARCH_KEY)" '^200 .*kira-docs' \
+      "DOCS_SEARCH_KEY in kira/env/librechat.env and docs/env/docs-search.env must be the same (setup.sh)" \
+      POST http://docs-search:8095/mcp "$(env_get "$LC_ENV" DOCS_SEARCH_KEY)" \
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+    for t in docs-login:4180/ping docs-download:8080/health; do
+      if docker exec caddy wget -q -T 10 -O /dev/null "http://$t" 2>/dev/null; then ok "Caddy -> ${t%%/*}"
+      else bad "Caddy -> ${t%%/*}"; hint "docker logs --tail 50 ${t%%:*} – network kira-docsweb"; fi
+    done
+    # without login (and with a forged header) the download must send the browser to the login
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m 15 --resolve "$DOMAIN:443:127.0.0.1" \
+      -H 'X-Auth-Request-Email: test@example.com' -H 'X-Auth-Request-Groups: admin' \
+      "https://$DOMAIN/dokumente/test/kira-test-000000000000000000000000" || true)
+    case $code in
+      302) ok "Download without login -> login (forged headers ignored)" ;;
+      000) printf '  [info] download route not testable from this host (certificate/port 443) – open https://%s/dokumente/ in the browser\n' "$DOMAIN" ;;
+      *) bad "Download without login answers HTTP $code (expected 302 to the login)"; hint "sites/kira.d/docs.caddy, docker logs --tail 50 docs-login" ;;
+    esac
+    if st=$(docker exec docs-sync cat /data/status.json 2>/dev/null); then
+      python3 -c '
+import json, sys
+st = json.loads(sys.argv[1])
+print("  [info] last sync pass: " + (st.get("finished") or "running"))
+for a, s in sorted(st.get("agents", {}).items()):
+    line = f"{a}: {s.get("files", 0)} files" + (f" – ERROR {s["error"]}" if s.get("error") else "")
+    print("    " + line)
+' "$st" || true
+      grep -q '"error": "[^"]' <<<"$st" && bad "document sync reports errors (above)" && hint "docker logs --tail 80 docs-sync"
+    else
+      printf '  [info] no sync pass finished yet – docker logs -f docs-sync\n'
+    fi
+    "$KIRA_DIR/scripts/templates-reload.sh" --status >/dev/null \
+      || printf '  [info] template skills changed – active after the nightly LibreChat restart (or now: %s/scripts/templates-reload.sh)\n' "$KIRA_DIR"
   fi
   if [ "${1:-}" = "--request" ]; then
     check_http "Bifrost -> Anthropic (mini request claude-haiku-5-5)" '^200 ' \

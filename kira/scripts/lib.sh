@@ -7,6 +7,7 @@ KIRA_DIR=/opt/kira
 . "$KIRA_DIR/env/monitoring.env"
 
 ONYX_ENABLED=$(sed -n 's/^ONYX_ENABLED=//p' "$KIRA_DIR/env/setup.env" | tail -1 | tr -d '"')
+DOCS_ENABLED=$(sed -n 's/^DOCS_ENABLED=//p' "$KIRA_DIR/env/setup.env" | tail -1 | tr -d '"')
 
 # expected containers (container_name in the compose.yml files)
 CONTAINERS=(caddy bifrost bifrost-db
@@ -16,6 +17,7 @@ if [ "$ONYX_ENABLED" = "true" ]; then
   CONTAINERS+=(onyx-api onyx-background onyx-web onyx-mcp onyx-inference-model onyx-indexing-model
                onyx-db onyx-opensearch onyx-cache onyx-nginx)
 fi
+if [ "$DOCS_ENABLED" = "true" ]; then CONTAINERS+=(docs-sync docs-search docs-download docs-login); fi
 export CONTAINERS
 
 # slack <text> – message to the Slack webhook (without webhook: print only); the URL goes via -K, not on the command line

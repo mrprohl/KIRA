@@ -1,0 +1,120 @@
+# ============================================================================
+# Documents for KIRA agents (optional, DOCS_ENABLED) – NAS folder per agent → Onyx, search, downloads
+# included by /opt/docs/docker-compose.yml; versions from env/versions.env (image built by setup.sh), Keycloak and NAS
+# address from env/compose.env, secrets from /opt/docs/env/*.env (all written by /opt/kira/setup.sh)
+#
+#   docs-sync      every 15 minutes: agent folders on the NAS (SMB 2/3, read only) → copy + text → Onyx;
+#                  _vorlagen → skill vorlagen-<agent> in /opt/docs/skills/live (LibreChat reads it read-only)
+#   docs-search    MCP server for LibreChat: search in exactly the document set of the calling agent
+#   docs-download  original files from the copy, behind the login (only with the right group)
+#   docs-login     Keycloak login for the downloads (oauth2-proxy, client kira-docs)
+#
+# Networks:
+#   outbound   172.31.65.0/24  docs-sync → only the NAS (ip:445) – LAN block, no internet
+#   auth       172.31.66.0/24  docs-login → Keycloak:443 (like LibreChat)
+#   kira-docs     internal, 172.30.31.0/24  LibreChat → docs-search; docs-sync/-search → Onyx API
+#   kira-docsweb  internal, 172.30.32.0/24  Caddy → docs-login, docs-download
+#   kira-llm      internal                 docs-sync → Bifrost (image model, own virtual key)
+# ============================================================================
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs: ["/tmp:size=512m"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+
+  docs-sync:
+    <<: *hardening
+    container_name: docs-sync
+    image: ${DOCS_IMAGE:?built by /opt/kira/setup.sh}
+    command: ["python", "-m", "kiradocs.sync"]
+    mem_limit: 2g
+    pids_limit: 256
+    env_file: [/opt/docs/env/docs-sync.env]
+    extra_hosts:
+      # NAS by name: the address setup.sh resolved (the firewall allows exactly this IP:445) – no DNS needed
+      - "${NAS_NAME:-nas.invalid}:${NAS_IP:-127.0.0.1}"
+    volumes:
+      - data:/data
+      - /opt/docs/skills:/skills
+      - /opt/kira/config/docs-agents.json:/config/docs-agents.json:ro
+    networks:
+      outbound: {}
+      kira-docs: {}
+      kira-llm: {}
+
+  docs-search:
+    <<: *hardening
+    container_name: docs-search
+    image: ${DOCS_IMAGE:?built by /opt/kira/setup.sh}
+    command: ["python", "-m", "kiradocs.search"]
+    mem_limit: 256m
+    pids_limit: 128
+    env_file: [/opt/docs/env/docs-search.env]
+    volumes:
+      - /opt/kira/config/docs-agents.json:/config/docs-agents.json:ro
+    networks:
+      kira-docs: {}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  docs-download:
+    <<: *hardening
+    container_name: docs-download
+    image: ${DOCS_IMAGE:?built by /opt/kira/setup.sh}
+    command: ["python", "-m", "kiradocs.download"]
+    mem_limit: 256m
+    pids_limit: 128
+    env_file: [/opt/docs/env/docs-download.env]
+    volumes:
+      - data:/data:ro
+      - logs:/logs
+      - /opt/kira/config/docs-agents.json:/config/docs-agents.json:ro
+    networks:
+      kira-docsweb: {}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  docs-login:
+    <<: *hardening
+    container_name: docs-login
+    image: quay.io/oauth2-proxy/oauth2-proxy:${OAUTH2_PROXY_TAG:?set in env/versions.env}
+    mem_limit: 128m
+    pids_limit: 64
+    env_file: [/opt/docs/env/docs-login.env]
+    extra_hosts:
+      # Keycloak directly in the LAN (setup.sh, /opt/kira/env/compose.env) – without an entry a harmless placeholder
+      - "${KEYCLOAK_HOST:-keycloak.invalid}:${KEYCLOAK_IP:-127.0.0.1}"
+    networks:
+      auth: {}
+      kira-docsweb: {}
+
+networks:
+  outbound:
+    name: docs-outbound
+    ipam: { config: [{ subnet: 172.31.65.0/24 }] }   # source of the LAN block – do not change
+  auth:
+    name: docs-auth
+    ipam: { config: [{ subnet: 172.31.66.0/24 }] }   # source of the LAN block – do not change
+  kira-docs:
+    external: true            # 172.30.31.0/24, created by /opt/kira/setup.sh
+  kira-docsweb:
+    external: true            # 172.30.32.0/24, created by /opt/kira/setup.sh
+  kira-llm:
+    external: true
+
+volumes:
+  data:     # copy of the originals, templates, state incl. transcriptions (state.db)
+  logs:     # download log (DOCS_DOWNLOAD_LOG)
