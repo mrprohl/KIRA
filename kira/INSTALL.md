@@ -44,12 +44,13 @@ Only if Onyx is used:
 
 On the vLLM servers, not on the KIRA server – details in `vllm/README.md` of the package:
 
-| Server | Instances (env file) | Address for setup.sh |
-|---|---|---|
-| privacy | `privacy.env` (`kira-privacy`, port 8101) and `embedding.env` (`kira-embedding`, port 8104) | `http://<ip>:8101`, `http://<ip>:8104` |
-| safety | `safety.env` (`kira-safety`, port 8102) | `http://<ip>:8102` |
-| answer | `answer.env` (`kira-answer`, port 8103) | `http://<ip>:8103` |
+| Server | Instances (env file) | Recommended model | Address for setup.sh |
+|---|---|---|---|
+| privacy | `privacy.env` (`kira-privacy`, port 8101) and `embedding.env` (`kira-embedding`, port 8104) | `Qwen/Qwen3.5-35B-A3B` and `Qwen/Qwen3-Embedding-0.6B` | `http://<ip>:8101`, `http://<ip>:8104` |
+| safety | `safety.env` (`kira-safety`, port 8102) | `Qwen/Qwen3Guard-Gen-8B` | `http://<ip>:8102` |
+| answer | `answer.env` (`kira-answer`, port 8103) | `Qwen/Qwen3.8-Flash-Next-FP8` (fallback `Qwen/Qwen3.8-27B`) | `http://<ip>:8103` |
 
+- the models are recommendations (`MODEL=` in the env file); the served names (`kira-…`) stay fixed
 - one API key for all instances – leave it empty in `setup.sh` (it generates one) and enter it afterwards in the env
   files of the vLLM servers, or set your own on both sides
 - allow the ports on the vLLM servers only from `<KIRA-IP>`
