@@ -26,6 +26,8 @@ Have ready (do not paste into chats or tickets):
       `kira/terms-of-use.md.example` in the package – deletion periods are filled in automatically), deletion period for chats (e.g. 90 days),
       retention of the Bifrost logs; addresses for privacy policy and help page (optional)
 - [ ] with agents per group: Keycloak groups and which agents each one sees (`kira/agents/groups.env.example`)
+- [ ] decision: privacy guard yes/no ([PRIVACY-GUARD.md](PRIVACY-GUARD.md)) – with yes the vLLM servers must be
+      running first (step 1b)
 
 Only if Onyx is used:
 - [ ] enlarge the LXC to **8 vCPU, 24 GB RAM, 150 GB disk** (Proxmox)
@@ -38,6 +40,25 @@ Only if Onyx is used:
 
 ---
 
+## Step 1b – vLLM servers (only with the privacy guard)
+
+On the GPU servers, not on the KIRA server – details in `vllm/README.md` of the package:
+
+| Server | Instances (env file) | Address for setup.sh |
+|---|---|---|
+| privacy (1× A100) | `privacy.env` (`kira-privacy`, port 8101) and `embedding.env` (`kira-embedding`, port 8104) | `http://<ip>:8101`, `http://<ip>:8104` |
+| safety (1× A100) | `safety.env` (`kira-safety`, port 8102) | `http://<ip>:8102` |
+| answer (6× A100) | `answer.env` (`kira-answer`, port 8103) | `http://<ip>:8103` |
+
+- one API key for all instances – leave it empty in `setup.sh` (it generates one) and enter it afterwards in the env
+  files of the vLLM servers, or set your own on both sides
+- allow the ports on the GPU servers only from `<KIRA-IP>`
+
+**Checkpoint:** on each GPU server `curl -s -H "Authorization: Bearer <key>" http://127.0.0.1:<port>/v1/models` lists the
+served name. (They can also be started after step 3 – the self-test then reports them as not reachable.)
+
+---
+
 ## Step 2 – Extract the package
 
 ```bash
@@ -45,7 +66,7 @@ ss -tlnp | grep -E ':(80|443|8080) '                   # ports must be free – 
 apt install -y cron python3 curl openssl unzip
 cd /root && unzip -o kira-stack.zip -d /opt             # extract directly on the server, not on Windows
 umask 077; scp root@<KEYCLOAK-IP>:/opt/keycloak/env/kira-client-kira.env /opt/kira/env/keycloak-client.env
-ls /opt                                                 # caddy bifrost kira websearch onyx
+ls /opt                                                 # caddy bifrost kira websearch onyx vllm
 ```
 
 The certificates live in the volume `caddy_data` and survive a reinstall.
@@ -69,6 +90,7 @@ Answers for this server:
 | upstream reverse proxy | `<PROXY-IP>` |
 | internal IP of the Keycloak server | `<KEYCLOAK-IP>` |
 | Onyx / images / speech | as decided in step 1; speech output e.g. `gpt-4o-mini-tts`, leave the default voice empty (= `fable`) |
+| Privacy guard? | as decided in step 1; with `yes`: the four vLLM addresses from step 1b, mode `observe`, Slack counts `yes`; vLLM API key empty = generate |
 | Restrict agents per Keycloak group? | `yes` if the groups are set up in Keycloak – mapper `groups`, default group `kira-users-default` under *Realm settings* → *User registration* → *Default groups* (README, section "Agents per Keycloak group"), otherwise `no` |
 | How long does a login stay active? | empty = `30d` (possible `8h` to `365d`) |
 | messages per user and minute | empty = `20` |
@@ -90,7 +112,8 @@ Answers for this server:
 | Start the stacks now? | `yes` |
 
 `setup.sh` pulls the images, starts bifrost → websearch → kira → (onyx) → caddy and runs the self-test.
-On first start this takes a few minutes, with Onyx up to 20 minutes.
+On first start this takes a few minutes, with Onyx up to 20 minutes. With the privacy guard it first builds Bifrost
+with the plugin (another 5–15 minutes).
 
 **Checkpoint:** at the end "Self-test: all OK." – apart from the note on the certificate if Let's Encrypt is still
 running. On errors the self-test shows the next command for each item; see section "Troubleshooting" in the README.
@@ -196,6 +219,22 @@ Trigger one workflow per external service – it runs with its virtual key and i
 Bifrost web interface under Logs with the service's name.
 
 **Checkpoint:** all monitors green, workflows of the external services successful.
+
+---
+
+## Step 8b – Privacy guard (only if enabled)
+
+```bash
+bash /opt/kira/scripts/self-test.sh --request          # section "Privacy guard": plugin, four vLLM, test IBAN
+docker logs bifrost 2>&1 | grep 'privacy-guard mode=' | tail -5
+```
+
+In KIRA: "Schreib eine Mahnung an Herrn Max Müller, IBAN DE89 3704 0044 0532 0130 00" – in mode `observe` the answer
+comes from Claude as usual and the log shows `decision=local`; in mode `enforce` the answer starts with "⚠️ Lokal
+beantwortet". After one or two weeks: `scripts/privacy-report.sh`, then `GUARD_MODE=enforce` in `env/setup.env` and
+`setup.sh` again.
+
+**Checkpoint:** self-test section "Privacy guard" all OK, the test IBAN is recognised.
 
 ---
 

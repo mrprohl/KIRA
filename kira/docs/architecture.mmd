@@ -29,6 +29,10 @@ flowchart LR
     OX[<b>Onyx</b><br/>intranet index, MCP]
   end
 
+  subgraph gpu["GPU servers in the LAN (optional)"]
+    VL[<b>vLLM</b><br/>privacy and safety checker,<br/>local answers, embeddings]
+  end
+
   C --> LC
   C -->|LLM API, admin UI| BF
   C -->|admin UI| OX
@@ -44,6 +48,7 @@ flowchart LR
   BF ==>|internet| AI([<b>Anthropic, OpenAI</b>])
   SX & FC ==>|internet| WEB([<b>Search engines,<br/>web pages</b>])
   OX ==>|internet| SP([<b>SharePoint / Graph</b>])
+  BF -.->|privacy guard| VL
 
   classDef ext fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A,stroke-width:1.5px
   classDef svc fill:#EEEDFE,stroke:#534AB7,color:#26215C,stroke-width:1.5px
@@ -53,11 +58,15 @@ flowchart LR
   class C,LC,ME,RAG,BF,SX,FC,OX svc
   class MO,VDB,BDB data
   class AI,WEB,SP net
+  classDef opt fill:#FAEEDA,stroke:#854F0B,color:#412402,stroke-width:1.5px,stroke-dasharray:5 4
+  class VL opt
   style caddy fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style kira fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style bifrost fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style websearch fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,color:#444441
   style onyx fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
+  style gpu fill:#FAFAF7,stroke:#B4B2A9,stroke-width:1px,stroke-dasharray:5 4,color:#444441
   linkStyle default stroke:#5F5E5A,stroke-width:1.6px
   linkStyle 17,18,19,20 stroke:#993C1D,stroke-width:3px
   linkStyle 16 stroke:#5F5E5A,stroke-width:1.6px,stroke-dasharray:6 5
+  linkStyle 21 stroke:#854F0B,stroke-width:2px,stroke-dasharray:6 5

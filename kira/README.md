@@ -358,7 +358,7 @@ OpenSearch needs `vm.max_map_count=262144` on the host (for LXC set it on the Pr
 | Monitoring | cron every 5 min: container health → Uptime Kuma push "KIRA Container", budget warnings → Slack |
 | Own agents (builder and model groups) | cron every 5 min `scripts/builder-sync.py` (only with `builder.…` in `agents/groups.env`); check `python3 /opt/kira/scripts/builder-sync.py --dry-run`, log `journalctl -t kira-builders` |
 | Backup | daily at 02:30 to `/var/backups/kira/<date>/` (Bifrost DB, MongoDB, RAG, Onyx DB, uploads, `/opt` stacks incl. secrets), 14 days; push "KIRA Backup" |
-| Versions | edit `/opt/<stack>/env/versions.env`, redeploy the stack. Back up first. Pinned versions instead of `latest` where possible |
+| Versions | edit `/opt/<stack>/env/versions.env`, redeploy the stack. Back up first. Pinned versions instead of `latest` where possible. With the privacy guard, Bifrost: change `BIFROST_TAG`, then `setup.sh` (builds the image with the plugin) |
 | Caddy | site blocks `/opt/caddy/config/sites/*.caddy` freely editable, `docker exec caddy caddy reload --config /etc/caddy/Caddyfile` |
 | Privacy guard | decisions `docker logs bifrost 2>&1 \| grep 'privacy-guard mode='`, counts `scripts/privacy-report.sh` – [PRIVACY-GUARD.md](PRIVACY-GUARD.md) |
 | Logo and favicon | replace the files in `/opt/kira/branding/`, `bash /opt/kira/setup.sh` (restarts LibreChat) – section "Branding" |
